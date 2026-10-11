@@ -1,0 +1,24 @@
+# Docker ejecuta únicamente PostgreSQL. NestJS y las migraciones corren en el equipo.
+name: unired-dev
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-unired}
+      POSTGRES_USER: ${DB_USER:-unired}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Ejecuta npm run setup:env}
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "127.0.0.1:${DB_EXTERNAL_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres_data:
