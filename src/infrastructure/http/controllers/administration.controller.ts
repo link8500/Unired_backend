@@ -8,10 +8,16 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { AdministrationUseCases } from '../../../application/administration/administration.use-cases';
 import { Actor, Row } from '../../../domain/common/contracts';
 import { BodyFields, CurrentActor, Paged } from '../common/api.decorators';
+import { universityProfileFields } from '../../../domain/policies/user-profile';
 
 @ApiTags('Administración y moderación')
 @ApiBearerAuth()
@@ -35,7 +41,26 @@ export class AdministrationController {
   }
   @Get('users')
   @Paged()
-  @ApiOperation({ summary: 'Directorio administrativo: q y estado' })
+  @ApiQuery({ name: 'q', required: false, description: 'Nombre, correo o ID' })
+  @ApiQuery({
+    name: 'rol',
+    required: false,
+    enum: ['usuario', 'tutor', 'revisor_tutores', 'moderador', 'administrador'],
+  })
+  @ApiQuery({
+    name: 'estado',
+    required: false,
+    enum: ['activo', 'pendiente_email', 'suspendido'],
+  })
+  @ApiQuery({
+    name: 'sort',
+    required: false,
+    enum: ['recientes', 'nombre', 'publicaciones'],
+  })
+  @ApiOperation({
+    summary:
+      'Directorio con búsqueda por nombre/correo/ID, estado, rol y sort; incluye estudios y conteos',
+  })
   users(@CurrentActor() actor: Actor, @Query() query: Row) {
     return this.admin.users(actor, query);
   }
@@ -43,6 +68,23 @@ export class AdministrationController {
   @ApiOperation({ summary: 'Datos del usuario sin credenciales ni tokens' })
   user(@CurrentActor() actor: Actor, @Param('id') id: string) {
     return this.admin.user(actor, id);
+  }
+  @Patch('users/:id/profile')
+  @BodyFields(
+    'Corregir datos personales con motivo auditado; los campos dependen del tipo de perfil',
+    ['motivo', ...universityProfileFields],
+    ['motivo'],
+  )
+  @ApiOperation({
+    summary:
+      'Editar datos del perfil con motivo auditado; respeta el tipo de perfil y no cambia claves, correo o permisos',
+  })
+  profile(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.admin.editUserProfile(actor, id, body);
   }
   @Patch('users/:id/state')
   @BodyFields('Activar cuenta verificada, suspender o desactivar con motivo', [

@@ -17,7 +17,9 @@ import {
   BodyFields,
   CurrentActor,
   Public,
+  ProfileBodyFields,
 } from '../common/api.decorators';
+import { universityProfileFields } from '../../../domain/policies/user-profile';
 
 @ApiTags('Autenticación')
 @Controller('auth')
@@ -27,8 +29,8 @@ export class IdentityController {
   @Post('register')
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @BodyFields(
-    'Registrar una cuenta y enviar su verificación',
-    ['nombre', 'email', 'password', 'edad'],
+    'Registrar un usuario con perfil universitario opcional y la política de verificación configurada',
+    ['email', 'password', ...universityProfileFields],
     ['nombre', 'email', 'password'],
   )
   register(@Body() body: unknown) {
@@ -126,20 +128,7 @@ export class AccountController {
     return this.identity.me(actor);
   }
   @Patch()
-  @BodyFields(
-    'Editar únicamente mi perfil',
-    [
-      'nombre',
-      'edad',
-      'presentacion',
-      'telefono',
-      'telefonoPublico',
-      'areaProfesional',
-      'ciudad',
-      'notificacionesActivas',
-    ],
-    [],
-  )
+  @ProfileBodyFields()
   edit(@CurrentActor() actor: Actor, @Body() body: unknown) {
     return this.identity.editProfile(actor, body);
   }

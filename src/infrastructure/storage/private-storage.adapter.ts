@@ -76,6 +76,7 @@ export class PrivateStorageAdapter implements BinaryStorage {
           'video/mp4',
           'video/webm',
           'application/pdf',
+          'application/zip',
         ].includes(type.mime),
       'Formato de archivo no permitido.',
       415,

@@ -13,6 +13,12 @@ import { Usuarios, TokensCuenta } from '../../domain/common/models';
 import * as v from '../../domain/common/validation';
 import { BaseUseCases } from '../shared/base.use-cases';
 import { preserveAdministrator } from '../shared/admin-safety';
+import {
+  employmentChanges,
+  parseProfile,
+  profileDefinition,
+  splitProfileFields,
+} from '../../domain/policies/user-profile';
 
 function visible(user: Usuarios) {
   return {
@@ -34,8 +40,18 @@ export class IdentityUseCases extends BaseUseCases {
     private readonly passwords: Passwords,
     private readonly tokens: Tokens,
     private readonly mail: Mail,
+    private readonly requireEmailVerification = true,
   ) {
     super(db);
+  }
+  /** El correo sigue sin verificar; al reactivar la política se bloquea
+   * nuevamente el acceso protegido de las cuentas que omitieron ese paso. */
+  private effectiveState(user: Usuarios): string {
+    return this.requireEmailVerification &&
+      user.estado === 'activo' &&
+      !user.emailVerificadoEn
+      ? 'pendiente_email'
+      : user.estado;
   }
   private async user(store: Store, actor: Actor): Promise<Usuarios> {
     const user = await store.one('usuarios', {
@@ -102,34 +118,46 @@ export class IdentityUseCases extends BaseUseCases {
     return row;
   }
   async register(input: unknown): Promise<Row> {
-    const body = v.object(input, ['nombre', 'email', 'password', 'edad']);
+    // El registro público siempre crea un usuario, nunca permite elegir un rol.
+    const fields = employmentChanges(
+      parseProfile(input, ['usuario'], ['email', 'password']),
+    );
+    const body = input as Row;
+    const { account, profile } = splitProfileFields(fields);
     const data = {
+      ...account,
       nombre: v.text(body.nombre, 'nombre', 180),
       email: v.email(body.email),
-      ...(body.edad === undefined
-        ? {}
-        : { edad: v.integer(body.edad, 'edad', 0, 130) }),
     };
     const hash = await this.passwords.hash(v.password(body.password));
     const user = await this.db.transaction(async (tx) => {
-      const user = await tx.store.insert('usuarios', data);
+      const user = await tx.store.insert('usuarios', {
+        ...data,
+        estado: this.requireEmailVerification ? 'pendiente_email' : 'activo',
+      });
       await tx.store.insert('credenciales_usuario', {
         usuarioId: user.id,
         passwordHash: hash,
       });
-      await tx.store.insert('perfiles_usuario', { usuarioId: user.id });
+      await tx.store.insert('perfiles_usuario', {
+        usuarioId: user.id,
+        ...profile,
+      });
       await tx.store.insert('usuario_roles', {
         usuarioId: user.id,
         rolCodigo: 'usuario',
       });
-      await this.sendToken(tx, user, 'verificar_email');
+      if (this.requireEmailVerification)
+        await this.sendToken(tx, user, 'verificar_email');
       await this.audit(tx, undefined, 'cuenta.registrada', 'usuario', user.id);
       return user;
     });
     return {
       usuario: visible(user),
-      mensaje:
-        'Cuenta creada. Verifica tu correo antes de publicar o inscribirte.',
+      verificacionEmailRequerida: this.requireEmailVerification,
+      mensaje: this.requireEmailVerification
+        ? 'Cuenta creada. Verifica tu correo antes de publicar o inscribirte.'
+        : 'Cuenta creada. Puedes iniciar sesión; la verificación de correo está desactivada en desarrollo.',
     };
   }
   async login(input: unknown): Promise<Row> {
@@ -157,7 +185,7 @@ export class IdentityUseCases extends BaseUseCases {
       'INVALID_CREDENTIALS',
     );
     return this.db.transaction(async (tx) => {
-      const locked = await tx.store.one(
+      let locked = await tx.store.one(
         'usuarios',
         { id: user.id },
         { lock: true },
@@ -169,6 +197,23 @@ export class IdentityUseCases extends BaseUseCases {
         'Cuenta no disponible.',
         401,
       );
+      if (
+        !this.requireEmailVerification &&
+        locked.estado === 'pendiente_email'
+      ) {
+        [locked] = await tx.store.update(
+          'usuarios',
+          { id: locked.id },
+          { estado: 'activo' },
+        );
+        await this.audit(
+          tx,
+          undefined,
+          'cuenta.verificacion_omitida_desarrollo',
+          'usuario',
+          locked.id,
+        );
+      }
       const sid = this.tokens.uuid();
       const refreshToken = sid + '.' + this.tokens.random();
       await tx.store.insert('sesiones_usuario', {
@@ -181,7 +226,8 @@ export class IdentityUseCases extends BaseUseCases {
         accessToken: await this.tokens.access(user.id, sid),
         refreshToken,
         expiresIn: 900,
-        usuario: visible(locked),
+        usuario: { ...visible(locked), estado: this.effectiveState(locked) },
+        verificacionEmailRequerida: this.requireEmailVerification,
         roles: (
           await tx.store.find('usuario_roles', { usuarioId: user.id })
         ).map((row) => row.rolCodigo),
@@ -225,7 +271,7 @@ export class IdentityUseCases extends BaseUseCases {
     );
     return {
       id: user.id,
-      estado: user.estado,
+      estado: this.effectiveState(user),
       sessionId: session.id,
       roles: (
         await this.db.read.store.find('usuario_roles', { usuarioId: user.id })
@@ -305,7 +351,10 @@ export class IdentityUseCases extends BaseUseCases {
         { lock: true },
       );
       ensure(
-        user && !user.eliminadoEn && user.estado === 'pendiente_email',
+        user &&
+          !user.eliminadoEn &&
+          (user.estado === 'pendiente_email' ||
+            (user.estado === 'activo' && !user.emailVerificadoEn)),
         'Cuenta no disponible.',
       );
       await tx.store.update(
@@ -326,7 +375,11 @@ export class IdentityUseCases extends BaseUseCases {
   async resendVerification(actor: Actor): Promise<Row> {
     return this.db.transaction(async (tx) => {
       const user = await this.user(tx.store, actor);
-      ensure(user.estado === 'pendiente_email', 'El correo ya fue verificado.');
+      ensure(
+        ['pendiente_email', 'activo'].includes(user.estado) &&
+          !user.emailVerificadoEn,
+        'El correo ya fue verificado o la cuenta no está disponible.',
+      );
       await this.sendToken(tx, user, 'verificar_email');
       return { mensaje: 'Correo de verificación encolado.' };
     });
@@ -437,9 +490,15 @@ export class IdentityUseCases extends BaseUseCases {
   }
   async me(actor: Actor): Promise<Row> {
     const user = await this.user(this.db.read.store, actor);
+    const roles = (
+      await this.db.read.store.find('usuario_roles', { usuarioId: actor.id })
+    ).map((entry) => entry.rolCodigo);
     return {
       ...visible(user),
-      roles: actor.roles,
+      estado: this.effectiveState(user),
+      verificacionEmailRequerida: this.requireEmailVerification,
+      roles,
+      ...profileDefinition(roles),
       perfil: await this.db.read.store.one('perfiles_usuario', {
         usuarioId: actor.id,
       }),
@@ -472,7 +531,11 @@ export class IdentityUseCases extends BaseUseCases {
       const [updated] = await tx.store.update(
         'usuarios',
         { id: actor.id },
-        { email, estado: 'pendiente_email', emailVerificadoEn: null },
+        {
+          email,
+          estado: this.requireEmailVerification ? 'pendiente_email' : 'activo',
+          emailVerificadoEn: null,
+        },
       );
       await tx.store.update(
         'tokens_cuenta',
@@ -484,7 +547,8 @@ export class IdentityUseCases extends BaseUseCases {
         { usuarioId: actor.id, revocadaEn: null },
         { revocadaEn: new Date() },
       );
-      await this.sendToken(tx, updated, 'verificar_email');
+      if (this.requireEmailVerification)
+        await this.sendToken(tx, updated, 'verificar_email');
       await this.mail.enqueue(
         tx.store,
         oldEmail,
@@ -493,8 +557,10 @@ export class IdentityUseCases extends BaseUseCases {
       );
       await this.audit(tx, actor, 'cuenta.email_cambiado', 'usuario', actor.id);
       return {
-        mensaje:
-          'Correo cambiado. Verifica la nueva dirección e inicia sesión nuevamente.',
+        verificacionEmailRequerida: this.requireEmailVerification,
+        mensaje: this.requireEmailVerification
+          ? 'Correo cambiado. Verifica la nueva dirección e inicia sesión nuevamente.'
+          : 'Correo cambiado. Inicia sesión nuevamente; la verificación está desactivada en desarrollo.',
       };
     });
   }
@@ -523,33 +589,47 @@ export class IdentityUseCases extends BaseUseCases {
     return { mensaje: 'Sesión revocada.' };
   }
   async editProfile(actor: Actor, input: unknown): Promise<Row> {
-    const body = v.object(input, [
-      'nombre',
-      'edad',
-      'presentacion',
-      'telefono',
-      'telefonoPublico',
-      'areaProfesional',
-      'ciudad',
-      'notificacionesActivas',
-    ]);
-    const fields = v.pickDefined(body, {
-      nombre: (x) => v.text(x, 'nombre', 180),
-      edad: (x) => v.integer(x, 'edad', 0, 130),
-      presentacion: (x) =>
-        x === null ? null : v.text(x, 'presentacion', 5000, 0),
-      telefono: (x) => (x === null ? null : v.text(x, 'telefono', 30, 0)),
-      telefonoPublico: (x) => v.boolean(x, 'telefonoPublico'),
-      areaProfesional: (x) =>
-        x === null ? null : v.text(x, 'areaProfesional', 160, 0),
-      ciudad: (x) => (x === null ? null : v.text(x, 'ciudad', 120, 0)),
-      notificacionesActivas: (x) => v.boolean(x, 'notificacionesActivas'),
-    });
     await this.db.transaction(async (tx) => {
-      const account: Row = {};
-      const profile: Row = {};
-      for (const [key, value] of Object.entries(fields))
-        (['nombre', 'edad'].includes(key) ? account : profile)[key] = value;
+      // Comparte el bloqueo de cuenta con los cambios de roles administrativos.
+      // La excepción se decide con roles almacenados, no con datos del formulario.
+      const user = await tx.store.one(
+        'usuarios',
+        { id: actor.id, eliminadoEn: null },
+        { lock: true },
+      );
+      if (!user) missing();
+      const roles = (
+        await tx.store.find('usuario_roles', { usuarioId: actor.id })
+      ).map((entry) => entry.rolCodigo);
+      const current = await tx.store.one(
+        'perfiles_usuario',
+        { usuarioId: actor.id },
+        { lock: true },
+      );
+      if (!current) missing('Perfil no disponible.');
+      // Los datos y las imágenes elegidas se confirman en una transacción.
+      const imageFields = ['avatarArchivoId', 'bannerArchivoId'];
+      const body = v.object(input, [
+        ...profileDefinition(roles).camposPerfilEditables,
+        ...imageFields,
+      ]);
+      const fields = employmentChanges(
+        profileDefinition(roles).camposPerfilEditables.some(
+          (key) => body[key] !== undefined,
+        ) ? parseProfile(body, roles, imageFields) : {},
+        current,
+      );
+      for (const [key, purpose] of [
+        ['avatarArchivoId', 'avatar'],
+        ['bannerArchivoId', 'banner_perfil'],
+      ]) {
+        if (body[key] === undefined) continue;
+        if (body[key] !== null)
+          await this.file(tx.store, body[key], actor, purpose);
+        fields[key] = body[key] === null ? null : v.id(body[key]);
+      }
+      ensure(Object.keys(fields).length > 0, 'No hay campos editables.');
+      const { account, profile } = splitProfileFields(fields);
       if (Object.keys(account).length)
         await tx.store.update('usuarios', { id: actor.id }, account);
       if (Object.keys(profile).length)

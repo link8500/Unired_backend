@@ -3,15 +3,28 @@ import { ensure, missing } from '../../domain/common/errors';
 import * as v from '../../domain/common/validation';
 import { price } from '../../domain/policies/prices';
 import { BaseUseCases } from '../shared/base.use-cases';
+import {
+  categoryFields,
+  extraMarketDetails,
+  extraMarketFields,
+} from '../../domain/policies/market-attributes';
+import {
+  listingDetailFields,
+  listingDetails,
+} from '../../domain/policies/publication-details';
 
 /** Anuncios entre personas: el servidor obtiene al vendedor de la sesión. */
 export class MarketplaceUseCases extends BaseUseCases {
-  categories() {
-    return this.db.read.store.find(
+  async categories() {
+    const rows = await this.db.read.store.find(
       'categorias_market',
       { activo: true },
       { order: { nombre: 'ASC' }, limit: 200 },
     );
+    return rows.map((row) => ({
+      ...row,
+      camposDetalle: categoryFields(row.codigo),
+    }));
   }
   catalog(query: Row) {
     return this.db.read.queries.catalog('listings', {
@@ -88,6 +101,8 @@ export class MarketplaceUseCases extends BaseUseCases {
   async create(actor: Actor, input: unknown): Promise<Row> {
     const body = v.object(input, [
       'categoriaId',
+      ...listingDetailFields,
+      ...extraMarketFields,
       'titulo',
       'descripcion',
       'condicion',
@@ -108,9 +123,9 @@ export class MarketplaceUseCases extends BaseUseCases {
         ['nuevo', 'como_nuevo', 'usado'],
         'condicion',
       ),
-      ciudad:
-        body.ciudad === undefined ? null : v.text(body.ciudad, 'ciudad', 120),
+      ciudad: body.ciudad == null ? null : v.text(body.ciudad, 'ciudad', 120),
       ...price(body, true),
+      ...listingDetails(body),
     };
     return this.db.transaction(async (tx) => {
       ensure(
@@ -120,7 +135,13 @@ export class MarketplaceUseCases extends BaseUseCases {
         }),
         'Categoría no disponible.',
       );
-      const listing = await tx.store.insert('anuncios_market', data);
+      const category = await tx.store.one('categorias_market', {
+        id: categoryId,
+      });
+      const listing = await tx.store.insert('anuncios_market', {
+        ...data,
+        ...extraMarketDetails(body, category!.codigo),
+      });
       await this.audit(tx, actor, 'anuncio.creado', 'anuncio', listing.id);
       return listing;
     });
@@ -132,6 +153,8 @@ export class MarketplaceUseCases extends BaseUseCases {
   ): Promise<Row> {
     const body = v.object(input, [
       'versionLock',
+      ...listingDetailFields,
+      ...extraMarketFields,
       'titulo',
       'descripcion',
       'condicion',
@@ -161,27 +184,47 @@ export class MarketplaceUseCases extends BaseUseCases {
       );
       const editable = { ...body };
       delete editable.versionLock;
-      const fields = v.pickDefined(editable, {
-        titulo: (x) => v.text(x, 'titulo', 220),
-        descripcion: (x) => v.text(x, 'descripcion', 20000),
-        condicion: (x) =>
-          v.choice(x, ['nuevo', 'como_nuevo', 'usado'], 'condicion'),
-        tipoPrecio: (x) =>
-          v.choice(
-            x,
-            ['fijo', 'negociable', 'gratis', 'a_consultar'],
-            'tipoPrecio',
-          ),
-        precioBase: (x) => (x === null ? null : v.money(x, 'precioBase')),
-        descuentoPorcentaje: (x) => v.money(x, 'descuentoPorcentaje', 9000n),
-        moneda: (x) => v.text(x, 'moneda', 3, 3),
-        ciudad: (x) => (x === null ? null : v.text(x, 'ciudad', 120)),
+      const fields = v.pickDefined(
+        editable,
+        {
+          titulo: (x) => v.text(x, 'titulo', 220),
+          descripcion: (x) => v.text(x, 'descripcion', 20000),
+          condicion: (x) =>
+            v.choice(x, ['nuevo', 'como_nuevo', 'usado'], 'condicion'),
+          tipoPrecio: (x) =>
+            v.choice(
+              x,
+              ['fijo', 'negociable', 'gratis', 'a_consultar'],
+              'tipoPrecio',
+            ),
+          precioBase: (x) => (x === null ? null : v.money(x, 'precioBase')),
+          descuentoPorcentaje: (x) => v.money(x, 'descuentoPorcentaje', 9000n),
+          moneda: (x) => v.text(x, 'moneda', 3, 3),
+          ciudad: (x) => (x === null ? null : v.text(x, 'ciudad', 120)),
+        },
+        { allowEmpty: true },
+      );
+      const category = await tx.store.one('categorias_market', {
+        id: listing.categoriaId,
       });
+      const details = {
+        ...listingDetails(body),
+        ...extraMarketDetails(body, category?.codigo),
+      };
+      ensure(
+        Object.keys(fields).length || Object.keys(details).length,
+        'No hay campos editables.',
+      );
       const pricing = price({ ...listing, ...fields }, true);
       const [result] = await tx.store.update(
         'anuncios_market',
         { id: listing.id },
-        { ...fields, ...pricing, versionLock: listing.versionLock + 1 },
+        {
+          ...fields,
+          ...details,
+          ...pricing,
+          versionLock: listing.versionLock + 1,
+        },
       );
       await this.audit(tx, actor, 'anuncio.actualizado', 'anuncio', listing.id);
       return result;
@@ -256,6 +299,53 @@ export class MarketplaceUseCases extends BaseUseCases {
         archivoId: v.id(fileId),
       });
       return { mensaje: 'Imagen desvinculada.' };
+    });
+  }
+  async replaceImage(
+    actor: Actor,
+    resourceId: unknown,
+    fileId: unknown,
+    input: unknown,
+  ): Promise<Row> {
+    const body = v.object(input, ['archivoId']);
+    return this.db.transaction(async (tx) => {
+      const listing = await this.owned(
+        tx.store,
+        'anuncios_market',
+        resourceId,
+        actor,
+        'vendedorId',
+      );
+      ensure(
+        !['bloqueado', 'archivado'].includes(listing.estado),
+        'El anuncio no admite cambios.',
+        409,
+      );
+      const previous = await tx.store.one(
+        'imagenes_anuncio',
+        { anuncioId: listing.id, archivoId: v.id(fileId) },
+        { lock: true },
+      );
+      if (!previous) missing('La fotografía ya no pertenece al anuncio.');
+      const file = await this.file(
+        tx.store,
+        body.archivoId,
+        actor,
+        'imagen_anuncio',
+      );
+      const [result] = await tx.store.update(
+        'imagenes_anuncio',
+        { anuncioId: listing.id, archivoId: previous.archivoId },
+        { archivoId: file.id },
+      );
+      await this.audit(
+        tx,
+        actor,
+        'anuncio.imagen_ajustada',
+        'anuncio',
+        listing.id,
+      );
+      return result;
     });
   }
   async state(actor: Actor, resourceId: unknown, input: unknown): Promise<Row> {

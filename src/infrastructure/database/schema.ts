@@ -109,6 +109,14 @@ export const schema: Record<
       telefonoPublico: 'telefono_publico',
       areaProfesional: 'area_profesional',
       ciudad: 'ciudad',
+      pais: 'pais',
+      departamento: 'departamento',
+      universidad: 'universidad',
+      sede: 'sede',
+      carrera: 'carrera',
+      anioEstudio: 'anio_estudio',
+      trabaja: 'trabaja',
+      ocupacion: 'ocupacion',
       avatarArchivoId: 'avatar_archivo_id',
       bannerArchivoId: 'banner_archivo_id',
       notificacionesActivas: 'notificaciones_activas',
@@ -128,6 +136,9 @@ export const schema: Record<
   },
   solicitudes_tutor: {
     columns: {
+      formacionAcademica: 'formacion_academica',
+      experienciaDocente: 'experiencia_docente',
+      especialidades: 'especialidades',
       id: 'id',
       tutorId: 'tutor_id',
       areaId: 'area_id',
@@ -137,7 +148,7 @@ export const schema: Record<
       creadoEn: 'creado_en',
       actualizadoEn: 'actualizado_en',
     },
-    json: [],
+    json: ['especialidades'],
   },
   documentos_solicitud: {
     columns: {
@@ -199,6 +210,12 @@ export const schema: Record<
   },
   tutorias: {
     columns: {
+      resumen: 'resumen',
+      idioma: 'idioma',
+      objetivos: 'objetivos',
+      requisitos: 'requisitos',
+      dirigidoA: 'dirigido_a',
+      duracionEstimadaMinutos: 'duracion_estimada_minutos',
       id: 'id',
       tutorId: 'tutor_id',
       areaId: 'area_id',
@@ -218,7 +235,7 @@ export const schema: Record<
       creadoEn: 'creado_en',
       actualizadoEn: 'actualizado_en',
     },
-    json: [],
+    json: ['objetivos', 'requisitos'],
   },
   secciones_tutoria: {
     columns: {
@@ -367,6 +384,15 @@ export const schema: Record<
   },
   anuncios_market: {
     columns: {
+      atributos: 'atributos',
+      etiquetas: 'etiquetas',
+      disponibilidad: 'disponibilidad',
+      referenciaPrivada: 'referencia_privada',
+      marca: 'marca',
+      modelo: 'modelo',
+      zonaEntrega: 'zona_entrega',
+      detalleEntrega: 'detalle_entrega',
+      formasEntrega: 'formas_entrega',
       id: 'id',
       vendedorId: 'vendedor_id',
       categoriaId: 'categoria_id',
@@ -386,7 +412,7 @@ export const schema: Record<
       creadoEn: 'creado_en',
       actualizadoEn: 'actualizado_en',
     },
-    json: [],
+    json: ['formasEntrega', 'atributos', 'etiquetas'],
   },
   imagenes_anuncio: {
     columns: {

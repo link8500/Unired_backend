@@ -3,6 +3,10 @@ import { ensure, missing } from '../../domain/common/errors';
 import * as v from '../../domain/common/validation';
 import { role } from '../../domain/policies/access';
 import { BaseUseCases } from '../shared/base.use-cases';
+import {
+  applicationDetails,
+  tutorApplicationFields,
+} from '../../domain/policies/publication-details';
 
 /** Expediente versionado: un envío conserva las evidencias aunque luego se corrija. */
 export class AccreditationUseCases extends BaseUseCases {
@@ -28,7 +32,7 @@ export class AccreditationUseCases extends BaseUseCases {
     );
   }
   async create(actor: Actor, input: unknown): Promise<Row> {
-    const body = v.object(input, ['areaId']);
+    const body = v.object(input, ['areaId', ...tutorApplicationFields]);
     const areaId = v.userId(body.areaId);
     return this.db.transaction(async (tx) => {
       const area = await tx.store.one('areas_tutoria', {
@@ -37,6 +41,7 @@ export class AccreditationUseCases extends BaseUseCases {
       });
       if (!area) missing('Área no disponible.');
       const request = await tx.store.insert('solicitudes_tutor', {
+        ...applicationDetails(body),
         tutorId: actor.id,
         areaId,
       });
@@ -82,6 +87,45 @@ export class AccreditationUseCases extends BaseUseCases {
       envios: submissions,
       revisiones: decisions,
     };
+  }
+  async editApplication(
+    actor: Actor,
+    resourceId: unknown,
+    input: unknown,
+  ): Promise<Row> {
+    const body = v.object(input, ['versionLock', ...tutorApplicationFields]);
+    return this.db.transaction(async (tx) => {
+      const request = await this.owned(
+        tx.store,
+        'solicitudes_tutor',
+        resourceId,
+        actor,
+        'tutorId',
+      );
+      ensure(
+        ['borrador', 'correcciones'].includes(request.estado),
+        'Solo puedes editar un borrador o expediente con correcciones.',
+        409,
+      );
+      ensure(
+        request.versionLock === v.integer(body.versionLock, 'versionLock', 1),
+        'El expediente cambió.',
+        409,
+      );
+      const [result] = await tx.store.update(
+        'solicitudes_tutor',
+        { id: request.id },
+        { ...applicationDetails(body), versionLock: request.versionLock + 1 },
+      );
+      await this.audit(
+        tx,
+        actor,
+        'expediente.datos_actualizados',
+        'solicitud',
+        request.id,
+      );
+      return result;
+    });
   }
   async addDocument(
     actor: Actor,

@@ -58,6 +58,12 @@ export class LiveUseCases extends BaseUseCases {
         return {
           ...publicSession,
           cuposDisponibles: Math.max(0, session.capacidad - reserved),
+          ...(booking
+            ? {
+                reservaSesionId: booking.sesionId,
+                estadoMiReserva: booking.estado,
+              }
+            : {}),
           ...(owner || (booking && session.estado !== 'cancelada')
             ? { enlaceReunion }
             : {}),
@@ -321,13 +327,43 @@ export class LiveUseCases extends BaseUseCases {
       sessionId,
     );
     ensure(session.tutoriaId === course.id, 'Sesión de otro curso.', 403);
-    return this.page(
-      this.db.read.store,
+    const store = this.db.read.store;
+    const result = await this.page(
+      store,
       'reservas_sesion',
       { sesionId: session.id },
       v.pagination(query),
       { creadoEn: 'ASC' },
     );
+    if (!result.items.length) return result;
+    const enrollments = await store.find(
+      'inscripciones_tutoria',
+      { id: { op: 'in', value: result.items.map((row) => row.inscripcionId) } },
+      { fields: ['id', 'alumnoId'], limit: result.limit },
+    );
+    const users = enrollments.length
+      ? await store.find(
+          'usuarios',
+          {
+            id: {
+              op: 'in',
+              value: [...new Set(enrollments.map((row) => row.alumnoId))],
+            },
+          },
+          { fields: ['id', 'nombre'], limit: result.limit },
+        )
+      : [];
+    const names = new Map(users.map((user) => [user.id, user.nombre]));
+    const students = new Map(
+      enrollments.map((row) => [row.id, names.get(row.alumnoId)]),
+    );
+    return {
+      ...result,
+      items: result.items.map((row) => ({
+        ...row,
+        alumnoNombre: students.get(String(row.inscripcionId)) ?? null,
+      })),
+    };
   }
   async attendance(
     actor: Actor,

@@ -145,11 +145,15 @@ export function pagination(input: Row): Pagination {
 export function pickDefined(
   input: Row,
   parsers: Record<string, (value: unknown) => unknown>,
+  options: { allowEmpty?: boolean } = {},
 ): Row {
   const result: Row = {};
   for (const [key, parser] of Object.entries(parsers)) {
     if (input[key] !== undefined) result[key] = parser(input[key]);
   }
-  ensure(Object.keys(result).length, 'No hay campos editables.');
+  ensure(
+    options.allowEmpty || Object.keys(result).length,
+    'No hay campos editables.',
+  );
   return result;
 }

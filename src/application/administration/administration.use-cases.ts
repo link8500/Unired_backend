@@ -1,9 +1,21 @@
-import { Actor, Row, Transaction, Where } from '../../domain/common/contracts';
+import {
+  Actor,
+  Database,
+  Row,
+  Transaction,
+  Where,
+} from '../../domain/common/contracts';
 import { ensure, missing } from '../../domain/common/errors';
 import * as v from '../../domain/common/validation';
 import { role } from '../../domain/policies/access';
 import { BaseUseCases } from '../shared/base.use-cases';
 import { preserveAdministrator } from '../shared/admin-safety';
+import {
+  employmentChanges,
+  parseProfile,
+  profileDefinition,
+  splitProfileFields,
+} from '../../domain/policies/user-profile';
 
 const roles = [
   'usuario',
@@ -12,6 +24,12 @@ const roles = [
   'administrador',
 ] as const;
 export class AdministrationUseCases extends BaseUseCases {
+  constructor(
+    db: Database,
+    private readonly requireEmailVerification = true,
+  ) {
+    super(db);
+  }
   private admin(actor: Actor) {
     role(actor, 'administrador');
   }
@@ -31,27 +49,22 @@ export class AdministrationUseCases extends BaseUseCases {
   async users(actor: Actor, query: Row) {
     this.admin(actor);
     const p = v.pagination(query);
-    const where: Where = { eliminadoEn: null };
-    if (p.q) where.nombre = { op: 'like', value: '%' + p.q + '%' };
+    const filters: Row = {};
     if (query.estado !== undefined)
-      where.estado = v.choice(
+      filters.estado = v.choice(
         query.estado,
         ['activo', 'pendiente_email', 'suspendido'],
         'estado',
       );
-    const page = await this.page(this.db.read.store, 'usuarios', where, p);
-    const assigned = await this.db.read.store.find('usuario_roles', {
-      usuarioId: { op: 'in', value: page.items.map((user) => user.id) },
-    });
-    return {
-      ...page,
-      items: page.items.map((user) => ({
-        ...user,
-        roles: assigned
-          .filter((entry) => entry.usuarioId === user.id)
-          .map((entry) => entry.rolCodigo),
-      })),
-    };
+    if (query.rol !== undefined)
+      filters.rol = v.choice(query.rol, [...roles, 'tutor'], 'rol');
+    if (query.sort !== undefined)
+      filters.sort = v.choice(
+        query.sort,
+        ['recientes', 'nombre', 'publicaciones'],
+        'sort',
+      );
+    return this.db.read.queries.adminUsers({ ...p, ...filters });
   }
   async user(actor: Actor, resourceId: unknown): Promise<Row> {
     this.admin(actor);
@@ -60,15 +73,61 @@ export class AdministrationUseCases extends BaseUseCases {
       'usuarios',
       v.userId(resourceId),
     );
+    const assigned = (
+      await this.db.read.store.find('usuario_roles', { usuarioId: user.id })
+    ).map((entry) => entry.rolCodigo);
     return {
       ...user,
-      roles: (
-        await this.db.read.store.find('usuario_roles', { usuarioId: user.id })
-      ).map((entry) => entry.rolCodigo),
+      roles: assigned,
+      ...profileDefinition(assigned),
       perfil: await this.db.read.store.one('perfiles_usuario', {
         usuarioId: user.id,
       }),
+      ...(await this.db.read.queries.adminUserSummary(user.id)),
     };
+  }
+  /** Edición administrativa explícita, con motivo y auditoría, sin cambiar credenciales. */
+  async editUserProfile(
+    actor: Actor,
+    resourceId: unknown,
+    input: unknown,
+  ): Promise<Row> {
+    this.admin(actor);
+    const id = v.userId(resourceId);
+    const body = input as Row;
+    ensure(
+      body && typeof body === 'object' && !Array.isArray(body),
+      'Se espera un objeto JSON.',
+    );
+    const { motivo, ...fields } = body;
+    const reason = v.text(motivo, 'motivo', 2000, 5);
+    await this.db.transaction(async (tx) => {
+      const user = await this.resource(tx.store, 'usuarios', id, true);
+      const assigned = (
+        await tx.store.find('usuario_roles', { usuarioId: user.id })
+      ).map((entry) => entry.rolCodigo);
+      const current = await tx.store.one(
+        'perfiles_usuario',
+        { usuarioId: user.id },
+        { lock: true },
+      );
+      if (!current) missing('Perfil no disponible.');
+      const parsed = employmentChanges(parseProfile(fields, assigned), current);
+      ensure(
+        Object.keys(parsed).length > 0,
+        'Indica los campos que deseas actualizar.',
+      );
+      const { account, profile } = splitProfileFields(parsed);
+      if (Object.keys(account).length)
+        await tx.store.update('usuarios', { id }, account);
+      if (Object.keys(profile).length)
+        await tx.store.update('perfiles_usuario', { usuarioId: id }, profile);
+      await this.audit(tx, actor, 'usuario.perfil_actualizado', 'usuario', id, {
+        motivo: reason,
+        campos: Object.keys(parsed),
+      });
+    });
+    return this.user(actor, id);
   }
   private async protectLastAdmin(tx: Transaction, user: Row): Promise<void> {
     await preserveAdministrator(tx, Number(user.id));
@@ -101,7 +160,7 @@ export class AdministrationUseCases extends BaseUseCases {
       if (state !== 'activo') await this.protectLastAdmin(tx, user);
       else
         ensure(
-          user.emailVerificadoEn,
+          !this.requireEmailVerification || user.emailVerificadoEn,
           'No puedes activar una cuenta sin correo verificado.',
         );
       const [result] = await tx.store.update(
@@ -230,11 +289,27 @@ export class AdministrationUseCases extends BaseUseCases {
     query: Row,
   ) {
     this.moderator(actor);
-    return this.page(
-      this.db.read.store,
-      entity,
-      entity === 'tutorias' ? { eliminadaEn: null } : { eliminadoEn: null },
-      v.pagination(query),
+    const filters: Row = {};
+    if (query.estado !== undefined)
+      filters.estado = v.choice(
+        query.estado,
+        entity === 'tutorias'
+          ? ['borrador', 'publicada', 'pausada', 'archivada', 'bloqueada']
+          : [
+              'borrador',
+              'publicado',
+              'reservado',
+              'vendido',
+              'archivado',
+              'bloqueado',
+            ],
+        'estado',
+      );
+    if (query.propietarioId !== undefined)
+      filters.propietarioId = v.userId(query.propietarioId);
+    return this.db.read.queries.adminPublications(
+      entity === 'tutorias' ? 'courses' : 'listings',
+      { ...v.pagination(query), ...filters },
     );
   }
   async moderate(

@@ -60,6 +60,11 @@ async function main() {
   const env = {
     ...process.env,
     NODE_ENV: 'test',
+    REQUIRE_EMAIL_VERIFICATION: process.argv.includes(
+      '--email-verification-disabled',
+    )
+      ? 'false'
+      : 'true',
     DB_HOST: '127.0.0.1',
     DB_NAME: 'unired_api_test',
     DB_USER: 'api_test',
@@ -205,7 +210,13 @@ async function main() {
       console.error(logs);
       throw Error('La API temporal no pudo arrancar.');
     }
-    const scenarios = require('../test/integration/api-scenarios.cjs');
+    const scenarios = process.argv.includes('--admin-ui')
+      ? require('../test/integration/admin-interface.cjs')
+      : process.argv.includes('--profiles')
+        ? require('../test/integration/user-profiles.cjs')
+        : process.argv.includes('--email-verification-disabled')
+          ? require('../test/integration/email-verification-disabled.cjs')
+          : require('../test/integration/api-scenarios.cjs');
     await scenarios({ root, base, env, temporary, client, adminPassword });
     console.log('OK: integración HTTP sobre PostgreSQL aislado.');
   } finally {

@@ -4,12 +4,14 @@ import {
   Row,
   Store,
   Tokens,
+  Transaction,
   Where,
 } from '../../domain/common/contracts';
 import { ensure, missing } from '../../domain/common/errors';
 import * as v from '../../domain/common/validation';
 import { BaseUseCases } from '../shared/base.use-cases';
 import { LearningUseCases } from '../learning/learning.use-cases';
+import { role } from '../../domain/policies/access';
 
 function publicMessage(message: Row): Row {
   if (!message.eliminadoEn) return message;
@@ -72,66 +74,145 @@ export class MessagingUseCases extends BaseUseCases {
     context: 'market' | 'tutoria',
     resourceId: unknown,
   ): Promise<Row> {
+    return this.db.transaction((tx) =>
+      this.openIn(tx, actor, context, resourceId),
+    );
+  }
+  private async openIn(
+    tx: Transaction,
+    actor: Actor,
+    context: 'market' | 'tutoria',
+    resourceId: unknown,
+  ): Promise<Row> {
+    const resource = await this.resource(
+      tx.store,
+      context === 'market' ? 'anuncios_market' : 'tutorias',
+      resourceId,
+      true,
+    );
+    const ownerId = Number(
+      resource[context === 'market' ? 'vendedorId' : 'tutorId'],
+    );
+    ensure(ownerId !== actor.id, 'No puedes conversar contigo mismo.');
+    const owner = await tx.store.one('usuarios', {
+      id: ownerId,
+      estado: 'activo',
+      eliminadoEn: null,
+    });
+    ensure(owner, 'El destinatario no está disponible.', 409);
+    ensure(
+      !(await this.blocked(tx.store, actor.id, ownerId)),
+      'No puedes contactar a este usuario.',
+      403,
+    );
+    if (context === 'market')
+      ensure(
+        (await tx.queries.publicListing(resource.id)) &&
+          ['publicado', 'reservado'].includes(resource.estado),
+        'Anuncio no disponible para nuevos contactos.',
+        409,
+      );
+    else await this.learning.conversationAccess(tx, actor.id, resource.id);
+    const key: Where =
+      context === 'market'
+        ? { anuncioId: resource.id, consultanteId: actor.id }
+        : { tutoriaId: resource.id, consultanteId: actor.id };
+    let conversation = await tx.store.one('conversaciones', key);
+    if (!conversation) {
+      conversation = await tx.store.insert('conversaciones', {
+        ...key,
+        tipo: context,
+        propietarioId: ownerId,
+      });
+      await tx.store.insert('participantes_conversacion', {
+        conversacionId: conversation.id,
+        usuarioId: actor.id,
+      });
+      await tx.store.insert('participantes_conversacion', {
+        conversacionId: conversation.id,
+        usuarioId: ownerId,
+      });
+    }
+    await tx.store.update(
+      'participantes_conversacion',
+      { conversacionId: conversation.id, usuarioId: actor.id },
+      { archivadaEn: null },
+    );
+    return conversation;
+  }
+
+  /** Leer la ficha no crea conversaciones ni envía mensajes. */
+  async marketContact(actor: Actor, listingId: unknown): Promise<Row> {
+    const listing = await this.resource(
+      this.db.read.store,
+      'anuncios_market',
+      listingId,
+    );
+    ensure(
+      await this.db.read.queries.publicListing(listing.id),
+      'Anuncio no disponible.',
+      404,
+    );
+    const conversation = await this.db.read.store.one('conversaciones', {
+      anuncioId: listing.id,
+      consultanteId: actor.id,
+    });
+    const sent =
+      conversation &&
+      (await this.db.read.store.one('mensajes', {
+        conversacionId: conversation.id,
+        autorId: actor.id,
+      }));
+    return { conversacionId: conversation?.id ?? null, mensajeEnviado: !!sent };
+  }
+
+  /** Confirmación explícita del comprador. El bloqueo evita repetir el primer
+   * contacto desde dos pestañas o después de una respuesta de red perdida. */
+  async inquire(
+    actor: Actor,
+    listingId: unknown,
+    input: unknown,
+  ): Promise<Row> {
+    const body = v.object(input, ['clienteId', 'contenido']);
+    v.uuid(body.clienteId);
+    v.text(body.contenido, 'contenido', 10000);
     return this.db.transaction(async (tx) => {
-      const resource = await this.resource(
-        tx.store,
-        context === 'market' ? 'anuncios_market' : 'tutorias',
-        resourceId,
+      const conversation = await this.openIn(tx, actor, 'market', listingId);
+      const message = await this.deliver(
+        tx,
+        actor,
+        conversation.id,
+        body,
         true,
       );
-      const ownerId = Number(
-        resource[context === 'market' ? 'vendedorId' : 'tutorId'],
-      );
-      ensure(ownerId !== actor.id, 'No puedes conversar contigo mismo.');
-      const owner = await tx.store.one('usuarios', {
-        id: ownerId,
-        estado: 'activo',
-        eliminadoEn: null,
-      });
-      ensure(owner, 'El destinatario no está disponible.', 409);
-      ensure(
-        !(await this.blocked(tx.store, actor.id, ownerId)),
-        'No puedes contactar a este usuario.',
-        403,
-      );
-      if (context === 'market')
-        ensure(
-          (await tx.queries.publicListing(resource.id)) &&
-            ['publicado', 'reservado'].includes(resource.estado),
-          'Anuncio no disponible para nuevos contactos.',
-          409,
-        );
-      else await this.learning.access(tx, actor, resource.id);
-      const key: Where =
-        context === 'market'
-          ? { anuncioId: resource.id, consultanteId: actor.id }
-          : { tutoriaId: resource.id, consultanteId: actor.id };
-      let conversation = await tx.store.one('conversaciones', key);
-      if (!conversation) {
-        conversation = await tx.store.insert('conversaciones', {
-          ...key,
-          tipo: context,
-          propietarioId: ownerId,
-        });
-        await tx.store.insert('participantes_conversacion', {
-          conversacionId: conversation.id,
-          usuarioId: actor.id,
-        });
-        await tx.store.insert('participantes_conversacion', {
-          conversacionId: conversation.id,
-          usuarioId: ownerId,
-        });
-      }
-      await tx.store.update(
-        'participantes_conversacion',
-        { conversacionId: conversation.id, usuarioId: actor.id },
-        { archivadaEn: null },
-      );
-      return conversation;
+      return {
+        conversacionId: conversation.id,
+        mensajeEnviado: true,
+        mensaje: message,
+      };
     });
   }
   list(actor: Actor, query: Row) {
-    return this.db.read.queries.conversations(actor.id, v.pagination(query));
+    return this.db.read.queries.conversations(actor.id, {
+      ...v.pagination(query),
+      ...(query.tipo === undefined
+        ? {}
+        : { tipo: v.choice(query.tipo, ['market', 'tutoria'], 'tipo') }),
+      ...(query.noLeidos === undefined
+        ? {}
+        : { noLeidos: query.noLeidos === 'true' }),
+    });
+  }
+  async details(actor: Actor, conversationId: unknown): Promise<Row> {
+    const c = await this.participant(this.db.read.store, actor, conversationId);
+    const result = await this.db.read.queries.conversations(actor.id, {
+      page: 1,
+      limit: 1,
+      conversacionId: c.id,
+      incluirArchivadas: true,
+    });
+    if (!result.items.length) missing('Conversación no disponible.');
+    return result.items[0];
   }
   async messages(actor: Actor, conversationId: unknown, query: Row) {
     const conversation = await this.participant(
@@ -139,7 +220,53 @@ export class MessagingUseCases extends BaseUseCases {
       actor,
       conversationId,
     );
-    const where: Where = { conversacionId: conversation.id };
+    return this.history(conversation.id, query);
+  }
+  reviewList(actor: Actor, query: Row) {
+    role(actor, 'administrador');
+    return this.db.read.queries.adminConversations({
+      ...v.pagination(query),
+      ...(query.tipo === undefined
+        ? {}
+        : { tipo: v.choice(query.tipo, ['market', 'tutoria'], 'tipo') }),
+      ...(query.usuarioId === undefined
+        ? {}
+        : { usuarioId: v.userId(query.usuarioId) }),
+    });
+  }
+  async reviewDetails(actor: Actor, id: unknown) {
+    role(actor, 'administrador');
+    const result = await this.db.read.queries.adminConversations({
+      page: 1,
+      limit: 1,
+      conversacionId: v.id(id),
+    });
+    if (!result.items.length) missing('Conversación no disponible.');
+    await this.db.transaction((tx) =>
+      this.audit(tx, actor, 'conversacion.revisada', 'conversacion', v.id(id)),
+    );
+    return { ...result.items[0], soloLectura: true };
+  }
+  async reviewMessages(actor: Actor, id: unknown, query: Row) {
+    role(actor, 'administrador');
+    const conversation = await this.resource(
+      this.db.read.store,
+      'conversaciones',
+      id,
+    );
+    await this.db.transaction((tx) =>
+      this.audit(
+        tx,
+        actor,
+        'conversacion.historial_consultado',
+        'conversacion',
+        conversation.id,
+      ),
+    );
+    return this.history(conversation.id, query);
+  }
+  private async history(conversationId: string, query: Row) {
+    const where: Where = { conversacionId: conversationId };
     if (query.afterId !== undefined)
       where.id = { op: 'gt', value: v.id(query.afterId) };
     const page = await this.page(
@@ -149,12 +276,45 @@ export class MessagingUseCases extends BaseUseCases {
       v.pagination(query),
       { id: 'ASC' },
     );
-    return { ...page, items: page.items.map(publicMessage) };
+    const items = page.items.map(publicMessage);
+    const ids = items
+      .filter((m) => m.archivoId)
+      .map((m) => String(m.archivoId));
+    const files = ids.length
+      ? await this.db.read.store.find(
+          'archivos',
+          { id: { op: 'in', value: ids } },
+          {
+            fields: ['id', 'nombreOriginal', 'mimeDetectado', 'tamanoBytes'],
+            limit: 50,
+          },
+        )
+      : [];
+    return {
+      ...page,
+      items: items.map((m) => ({
+        ...m,
+        ...(m.archivoId
+          ? { adjunto: files.find((f) => f.id === m.archivoId) }
+          : {}),
+      })),
+    };
   }
   async send(
     actor: Actor,
     conversationId: unknown,
     input: unknown,
+  ): Promise<Row> {
+    return this.db.transaction((tx) =>
+      this.deliver(tx, actor, conversationId, input),
+    );
+  }
+  private async deliver(
+    tx: Transaction,
+    actor: Actor,
+    conversationId: unknown,
+    input: unknown,
+    initialOnly = false,
   ): Promise<Row> {
     const body = v.object(input, ['clienteId', 'contenido', 'archivoId']);
     const nonce = v.uuid(body.clienteId);
@@ -167,80 +327,85 @@ export class MessagingUseCases extends BaseUseCases {
         ? null
         : v.id(body.archivoId);
     ensure(content || fileId, 'Escribe un mensaje o adjunta un archivo.');
-    return this.db.transaction(async (tx) => {
-      const conversation = await this.participant(
-        tx.store,
-        actor,
-        conversationId,
-        true,
-      );
-      const other =
-        conversation.propietarioId === actor.id
-          ? conversation.consultanteId
-          : conversation.propietarioId;
-      const recipient = await tx.store.one('usuarios', {
-        id: other,
+    const conversation = await this.participant(
+      tx.store,
+      actor,
+      conversationId,
+      true,
+    );
+    const other =
+      conversation.propietarioId === actor.id
+        ? conversation.consultanteId
+        : conversation.propietarioId;
+    const recipient = await tx.store.one('usuarios', {
+      id: other,
+      estado: 'activo',
+      eliminadoEn: null,
+    });
+    ensure(
+      conversation.estado === 'abierta' &&
+        recipient &&
+        !(await this.blocked(tx.store, actor.id, other)),
+      'La conversación no admite mensajes.',
+      403,
+    );
+    if (conversation.tipo === 'tutoria') {
+      // El chat permite resolver la solicitud pendiente, sin liberar material.
+      const student = await tx.store.one('usuarios', {
+        id: conversation.consultanteId,
         estado: 'activo',
         eliminadoEn: null,
       });
-      ensure(
-        conversation.estado === 'abierta' &&
-          recipient &&
-          !(await this.blocked(tx.store, actor.id, other)),
-        'La conversación no admite mensajes.',
-        403,
+      ensure(student, 'El alumno no está disponible.', 403);
+      await this.learning.conversationAccess(
+        tx,
+        Number(conversation.consultanteId),
+        conversation.tutoriaId,
       );
-      if (conversation.tipo === 'tutoria') {
-        // Incluso el tutor debe comprobar que el alumno conserva acceso al curso.
-        const student = await tx.store.one('usuarios', {
-          id: conversation.consultanteId,
-          estado: 'activo',
-          eliminadoEn: null,
-        });
-        ensure(student, 'El alumno no está disponible.', 403);
-        await this.learning.access(
-          tx,
-          { ...actor, id: conversation.consultanteId },
-          conversation.tutoriaId,
-        );
-      }
-      const key = {
+    }
+    if (initialOnly) {
+      const previous = await tx.store.one('mensajes', {
         conversacionId: conversation.id,
         autorId: actor.id,
-        clienteId: nonce,
-      };
-      const existing = await tx.store.one('mensajes', key);
-      if (existing) {
-        ensure(
-          existing.contenido === content && existing.archivoId === fileId,
-          'Este clienteId ya se usó con otro contenido.',
-          409,
-        );
-        return publicMessage(existing);
-      }
-      if (fileId) await this.file(tx.store, fileId, actor, 'adjunto_chat');
-      const message = await tx.store.insert('mensajes', {
-        ...key,
-        tipo: fileId ? 'archivo' : 'texto',
-        contenido: content,
-        archivoId: fileId,
       });
-      await tx.store.update(
-        'conversaciones',
-        { id: conversation.id },
-        { ultimoMensajeEn: new Date() },
+      if (previous) return publicMessage(previous);
+    }
+    const key = {
+      conversacionId: conversation.id,
+      autorId: actor.id,
+      clienteId: nonce,
+    };
+    const existing = await tx.store.one('mensajes', key);
+    if (existing) {
+      ensure(
+        existing.contenido === content && existing.archivoId === fileId,
+        'Este clienteId ya se usó con otro contenido.',
+        409,
       );
-      await tx.store.update(
-        'participantes_conversacion',
-        { conversacionId: conversation.id, usuarioId: other },
-        { archivadaEn: null },
-      );
-      await this.notify(tx, other, 'mensaje', 'Tienes un nuevo mensaje', {
-        conversacionId: conversation.id,
-        mensajeId: message.id,
-      });
-      return message;
+      return publicMessage(existing);
+    }
+    if (fileId) await this.file(tx.store, fileId, actor, 'adjunto_chat');
+    const message = await tx.store.insert('mensajes', {
+      ...key,
+      tipo: fileId ? 'archivo' : 'texto',
+      contenido: content,
+      archivoId: fileId,
     });
+    await tx.store.update(
+      'conversaciones',
+      { id: conversation.id },
+      { ultimoMensajeEn: new Date() },
+    );
+    await tx.store.update(
+      'participantes_conversacion',
+      { conversacionId: conversation.id, usuarioId: other },
+      { archivadaEn: null },
+    );
+    await this.notify(tx, other, 'mensaje', 'Tienes un nuevo mensaje', {
+      conversacionId: conversation.id,
+      mensajeId: message.id,
+    });
+    return message;
   }
   async read(
     actor: Actor,

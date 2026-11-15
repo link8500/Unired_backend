@@ -36,6 +36,7 @@ const extensions: Record<string, string> = {
   'video/mp4': 'mp4',
   'video/webm': 'webm',
   'application/pdf': 'pdf',
+  'application/zip': 'zip',
 };
 export function fileMetadata(file: Archivos) {
   return {
@@ -76,6 +77,10 @@ export class MediaUseCases extends BaseUseCases {
     );
     const image = detected.mime.startsWith('image/');
     const video = detected.mime.startsWith('video/');
+    ensure(
+      detected.mime !== 'application/zip' || purpose === 'recurso_curso',
+      'Los archivos ZIP solo se admiten como recursos del curso.',
+    );
     if (
       ['avatar', 'banner_perfil', 'portada_curso', 'imagen_anuncio'].includes(
         purpose,
@@ -95,13 +100,13 @@ export class MediaUseCases extends BaseUseCases {
       process.env[
         video
           ? 'UPLOAD_VIDEO_MAX_BYTES'
-          : detected.mime === 'application/pdf'
+          : ['application/pdf', 'application/zip'].includes(detected.mime)
             ? 'UPLOAD_DOCUMENT_MAX_BYTES'
             : 'UPLOAD_IMAGE_MAX_BYTES'
       ] ??
         (video
           ? 1073741824
-          : detected.mime === 'application/pdf'
+          : ['application/pdf', 'application/zip'].includes(detected.mime)
             ? 20971520
             : 10485760),
     );
@@ -491,8 +496,22 @@ export class MediaUseCases extends BaseUseCases {
         }
       if (
         !allowed &&
-        actor.roles.some((r) => ['administrador', 'moderador'].includes(r))
+        actor.roles.includes('administrador') &&
+        messages.length > 0
       ) {
+        await this.db.transaction((tx) =>
+          this.audit(
+            tx,
+            actor,
+            'archivo.conversacion_consultada',
+            'archivo',
+            file.id,
+            { conversacionId: messages[0].conversacionId },
+          ),
+        );
+        allowed = true;
+      }
+      if (!allowed && actor.roles.includes('moderador')) {
         const allMessages = await store.find(
           'mensajes',
           { archivoId: file.id },

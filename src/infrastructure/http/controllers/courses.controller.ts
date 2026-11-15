@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CoursesUseCases } from '../../../application/courses/courses.use-cases';
 import { MediaUseCases } from '../../../application/media/media.use-cases';
 import { Actor, Row } from '../../../domain/common/contracts';
+import { courseDetailFields } from '../../../domain/policies/publication-details';
 import {
   BodyFields,
   CurrentActor,
@@ -21,6 +22,7 @@ import {
 } from '../common/api.decorators';
 
 const courseFields = [
+  ...courseDetailFields,
   'titulo',
   'descripcion',
   'nivel',

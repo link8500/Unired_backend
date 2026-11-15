@@ -81,6 +81,14 @@ export interface PerfilesUsuario extends DataRow {
   telefonoPublico: boolean;
   areaProfesional: string | null;
   ciudad: string | null;
+  pais: string | null;
+  departamento: string | null;
+  universidad: string | null;
+  sede: string | null;
+  carrera: string | null;
+  anioEstudio: number | null;
+  trabaja: boolean | null;
+  ocupacion: string | null;
   avatarArchivoId: string | null;
   bannerArchivoId: string | null;
   notificacionesActivas: boolean;
@@ -96,6 +104,9 @@ export interface AreasTutoria extends DataRow {
 }
 
 export interface SolicitudesTutor extends DataRow {
+  formacionAcademica: string | null;
+  experienciaDocente: string | null;
+  especialidades: string[];
   id: string;
   tutorId: number;
   areaId: number;
@@ -155,6 +166,12 @@ export interface HabilitacionesTutor extends DataRow {
 }
 
 export interface Tutorias extends DataRow {
+  resumen: string | null;
+  idioma: string;
+  objetivos: string[];
+  requisitos: string[];
+  dirigidoA: string | null;
+  duracionEstimadaMinutos: number | null;
   id: string;
   tutorId: number;
   areaId: number;
@@ -297,6 +314,15 @@ export interface CategoriasMarket extends DataRow {
 }
 
 export interface AnunciosMarket extends DataRow {
+  atributos: Record<string, string>;
+  etiquetas: string[];
+  disponibilidad: string;
+  referenciaPrivada: string | null;
+  marca: string | null;
+  modelo: string | null;
+  zonaEntrega: string | null;
+  detalleEntrega: string | null;
+  formasEntrega: string[];
   id: string;
   vendedorId: number;
   categoriaId: number;

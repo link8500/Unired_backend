@@ -23,6 +23,55 @@ export class MessagingController {
     private readonly chat: MessagingUseCases,
     private readonly identity: IdentityUseCases,
   ) {}
+  @Get('admin/conversations')
+  @Paged()
+  @ApiOperation({
+    summary: 'Administrador: buscar conversaciones de tutorías y marketplace',
+  })
+  reviewList(@CurrentActor() actor: Actor, @Query() query: Row) {
+    return this.chat.reviewList(actor, query);
+  }
+  @Get('admin/conversations/:id')
+  @ApiOperation({
+    summary:
+      'Administrador: revisar participantes y contexto con registro de auditoría',
+  })
+  reviewDetails(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.reviewDetails(actor, id);
+  }
+  @Get('admin/conversations/:id/messages')
+  @Paged()
+  @ApiOperation({
+    summary:
+      'Administrador: historial paginado de lectura; no marca mensajes como leídos',
+  })
+  reviewMessages(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Query() query: Row,
+  ) {
+    return this.chat.reviewMessages(actor, id, query);
+  }
+  @Get('listings/:id/contact')
+  @ApiOperation({
+    summary:
+      'Consultar mi contacto previo sin crear un chat ni enviar mensajes',
+  })
+  contact(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.marketContact(actor, id);
+  }
+  @Post('listings/:id/inquiry')
+  @BodyFields('Confirmar una consulta inicial al vendedor una sola vez', [
+    'clienteId',
+    'contenido',
+  ])
+  inquiry(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.chat.inquire(actor, id, body);
+  }
   @Post('listings/:id/conversations')
   @ApiOperation({
     summary: 'Contactar al vendedor; el destinatario se obtiene del anuncio',
@@ -53,6 +102,14 @@ export class MessagingController {
     @Query() query: Row,
   ) {
     return this.chat.messages(actor, id, query);
+  }
+  @Get('conversations/:id')
+  @ApiOperation({
+    summary:
+      'Cabecera y contexto de una conversación de la que soy participante',
+  })
+  details(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.details(actor, id);
   }
   @Post('conversations/:id/messages')
   @BodyFields(

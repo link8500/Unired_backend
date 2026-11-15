@@ -12,6 +12,8 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { MarketplaceUseCases } from '../../../application/marketplace/marketplace.use-cases';
 import { Actor, Row } from '../../../domain/common/contracts';
+import { listingDetailFields } from '../../../domain/policies/publication-details';
+import { extraMarketFields } from '../../../domain/policies/market-attributes';
 import {
   BodyFields,
   CurrentActor,
@@ -20,6 +22,8 @@ import {
 } from '../common/api.decorators';
 
 const fields = [
+  ...listingDetailFields,
+  ...extraMarketFields,
   'titulo',
   'descripcion',
   'condicion',
@@ -123,6 +127,18 @@ export class MarketplaceController {
     @Param('fileId') fileId: string,
   ) {
     return this.market.removeImage(actor, id, fileId);
+  }
+  @Put('me/listings/:id/images/:fileId')
+  @BodyFields('Sustituir mi fotografía conservando posición y visibilidad', [
+    'archivoId',
+  ])
+  replaceImage(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Param('fileId') fileId: string,
+    @Body() body: unknown,
+  ) {
+    return this.market.replaceImage(actor, id, fileId, body);
   }
   @Post('me/listings/:id/updates')
   @BodyFields('Publicar una novedad de mi artículo', ['contenido'])

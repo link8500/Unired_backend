@@ -4,6 +4,17 @@ import * as v from '../../domain/common/validation';
 import { validGrant } from '../../domain/policies/access';
 import { price } from '../../domain/policies/prices';
 import { BaseUseCases } from '../shared/base.use-cases';
+import {
+  courseDetailFields,
+  courseDetails,
+} from '../../domain/policies/publication-details';
+
+// Los clientes anteriores pueden enviar metadatos que ahora controla la API.
+const acceptedCourseDetails = [
+  ...courseDetailFields,
+  'idioma',
+  'duracionEstimadaMinutos',
+] as const;
 
 export class CoursesUseCases extends BaseUseCases {
   catalog(query: Row) {
@@ -32,7 +43,15 @@ export class CoursesUseCases extends BaseUseCases {
         'lecciones_tutoria',
         { tutoriaId: course.id, archivadaEn: null, publicada: true },
         {
-          fields: ['id', 'seccionId', 'titulo', 'tipo', 'orden', 'vistaPrevia'],
+          fields: [
+            'id',
+            'seccionId',
+            'titulo',
+            'tipo',
+            'orden',
+            'vistaPrevia',
+            'videoArchivoId',
+          ],
           order: { orden: 'ASC' },
           limit: 2000,
         },
@@ -43,22 +62,40 @@ export class CoursesUseCases extends BaseUseCases {
         { order: { orden: 'ASC' }, limit: 100 },
       ),
     ]);
+    const videoIds = lessons
+      .filter((l) => l.videoArchivoId)
+      .map((l) => String(l.videoArchivoId));
+    const videos = videoIds.length
+      ? await this.db.read.store.find(
+          'archivos',
+          { id: { op: 'in', value: videoIds } },
+          { fields: ['id', 'duracionSegundos'], limit: 2000 },
+        )
+      : [];
+    const durations = new Map(
+      videos.map((video) => [video.id, video.duracionSegundos]),
+    );
+    const outline = lessons.map((lesson) => {
+      const result: Row = {
+        ...lesson,
+        duracionSegundos: lesson.videoArchivoId
+          ? (durations.get(lesson.videoArchivoId) ?? 0)
+          : 0,
+      };
+      delete result.videoArchivoId;
+      return result;
+    });
     return {
       ...course,
       secciones: sections.map((section) => ({
         ...section,
-        lecciones: lessons.filter((lesson) => lesson.seccionId === section.id),
+        lecciones: outline.filter((lesson) => lesson.seccionId === section.id),
       })),
       galeria: gallery,
     };
   }
   mine(actor: Actor, query: Row) {
-    return this.page(
-      this.db.read.store,
-      'tutorias',
-      { tutorId: actor.id, eliminadaEn: null },
-      v.pagination(query),
-    );
+    return this.db.read.queries.ownedCourses(actor.id, v.pagination(query));
   }
   async owner(store: Store, actor: Actor, resourceId: unknown, lock = true) {
     const course = await this.owned(
@@ -89,36 +126,116 @@ export class CoursesUseCases extends BaseUseCases {
     return course;
   }
   async ownDetails(actor: Actor, resourceId: unknown): Promise<Row> {
+    const store = this.db.read.store;
     const course = await this.owned(
-      this.db.read.store,
+      store,
       'tutorias',
       resourceId,
       actor,
       'tutorId',
       false,
     );
+    const now = new Date();
+    const [sections, lessons, gallery, grant, session, duration, resources] =
+      await Promise.all([
+        store.find(
+          'secciones_tutoria',
+          { tutoriaId: course.id, archivadaEn: null },
+          { order: { orden: 'ASC' }, limit: 200 },
+        ),
+        store.find(
+          'lecciones_tutoria',
+          { tutoriaId: course.id, archivadaEn: null },
+          { order: { orden: 'ASC' }, limit: 2000 },
+        ),
+        store.find(
+          'galeria_tutoria',
+          { tutoriaId: course.id },
+          { order: { orden: 'ASC' }, limit: 100 },
+        ),
+        store.one('habilitaciones_tutor', {
+          tutorId: actor.id,
+          areaId: course.areaId,
+        }),
+        ['en_vivo', 'mixta'].includes(course.modalidad)
+          ? store.one('sesiones_tutoria', {
+              tutoriaId: course.id,
+              estado: 'programada',
+              inicioEn: { op: 'gt', value: now },
+            })
+          : undefined,
+        this.db.read.queries.courseDuration(course.id),
+        store.find(
+          'recursos_leccion',
+          { tutoriaId: course.id },
+          { limit: 10000 },
+        ),
+      ]);
+    // Una lectura por lote permite presentar nombres y duraciones al autor sin
+    // exponer rutas de almacenamiento ni hacer una consulta por cada lección.
+    const fileIds = [
+      ...new Set(
+        [
+          ...lessons.map((lesson) => lesson.videoArchivoId),
+          ...resources.map((resource) => resource.archivoId),
+        ].filter(Boolean),
+      ),
+    ];
+    const files = fileIds.length
+      ? await store.find(
+          'archivos',
+          { id: { op: 'in', value: fileIds } },
+          {
+            fields: [
+              'id',
+              'nombreOriginal',
+              'duracionSegundos',
+              'tamanoBytes',
+              'extension',
+            ],
+            limit: 12000,
+          },
+        )
+      : [];
+    const media = new Map(files.map((file) => [String(file.id), file]));
+    const lessonResources = new Map<string, Row[]>();
+    for (const resource of resources) {
+      const key = String(resource.leccionId);
+      const items = lessonResources.get(key) ?? [];
+      const file = media.get(String(resource.archivoId));
+      items.push({
+        ...resource,
+        nombreOriginal: file?.nombreOriginal ?? resource.titulo,
+        tamanoBytes: file?.tamanoBytes ?? null,
+        extension: file?.extension ?? null,
+      });
+      lessonResources.set(key, items);
+    }
     return {
       ...course,
-      secciones: await this.db.read.store.find(
-        'secciones_tutoria',
-        { tutoriaId: course.id, archivadaEn: null },
-        { order: { orden: 'ASC' }, limit: 200 },
-      ),
-      lecciones: await this.db.read.store.find(
-        'lecciones_tutoria',
-        { tutoriaId: course.id, archivadaEn: null },
-        { order: { orden: 'ASC' }, limit: 2000 },
-      ),
-      galeria: await this.db.read.store.find(
-        'galeria_tutoria',
-        { tutoriaId: course.id },
-        { order: { orden: 'ASC' }, limit: 100 },
-      ),
+      duracionEstimadaMinutos: duration,
+      secciones: sections,
+      lecciones: lessons.map((lesson) => ({
+        ...lesson,
+        videoNombre:
+          media.get(String(lesson.videoArchivoId))?.nombreOriginal ?? null,
+        duracionSegundos:
+          media.get(String(lesson.videoArchivoId))?.duracionSegundos ?? 0,
+        recursos: lessonResources.get(String(lesson.id)) ?? [],
+      })),
+      galeria: gallery,
+      preparacion: {
+        acreditacionVigente: validGrant(grant, actor.id, course.areaId, now),
+        leccionesPublicadas: lessons.filter((lesson) => lesson.publicada)
+          .length,
+        tieneSesionFutura: Boolean(session),
+      },
     };
   }
   async create(actor: Actor, input: unknown): Promise<Row> {
     const body = v.object(input, [
       'areaId',
+      ...acceptedCourseDetails,
       'titulo',
       'descripcion',
       'nivel',
@@ -145,13 +262,14 @@ export class CoursesUseCases extends BaseUseCases {
         'modalidad',
       ),
       ...price(body, false),
+      ...courseDetails(body),
     };
     return this.db.transaction(async (tx) => {
       ensure(
         await tx.store.one('areas_tutoria', { id: areaId, activo: true }),
         'Área no disponible.',
       );
-      if (body.portadaArchivoId !== undefined)
+      if (body.portadaArchivoId != null)
         await this.file(
           tx.store,
           body.portadaArchivoId,
@@ -161,9 +279,7 @@ export class CoursesUseCases extends BaseUseCases {
       const course = await tx.store.insert('tutorias', {
         ...data,
         portadaArchivoId:
-          body.portadaArchivoId === undefined
-            ? null
-            : v.id(body.portadaArchivoId),
+          body.portadaArchivoId == null ? null : v.id(body.portadaArchivoId),
       });
       await this.audit(tx, actor, 'curso.creado', 'curso', course.id);
       return course;
@@ -176,6 +292,7 @@ export class CoursesUseCases extends BaseUseCases {
   ): Promise<Row> {
     const body = v.object(input, [
       'versionLock',
+      ...acceptedCourseDetails,
       'titulo',
       'descripcion',
       'nivel',
@@ -194,18 +311,31 @@ export class CoursesUseCases extends BaseUseCases {
       );
       const editable = { ...body };
       delete editable.versionLock;
-      const fields = v.pickDefined(editable, {
-        titulo: (x) => v.text(x, 'titulo', 220),
-        descripcion: (x) => v.text(x, 'descripcion', 20000),
-        nivel: (x) =>
-          v.choice(x, ['inicial', 'intermedio', 'avanzado', 'todos'], 'nivel'),
-        modalidad: (x) =>
-          v.choice(x, ['grabada', 'en_vivo', 'mixta'], 'modalidad'),
-        precioBase: (x) => v.money(x, 'precioBase'),
-        descuentoPorcentaje: (x) => v.money(x, 'descuentoPorcentaje', 9000n),
-        moneda: (x) => v.text(x, 'moneda', 3, 3),
-        portadaArchivoId: (x) => (x === null ? null : v.id(x)),
-      });
+      const fields = v.pickDefined(
+        editable,
+        {
+          titulo: (x) => v.text(x, 'titulo', 220),
+          descripcion: (x) => v.text(x, 'descripcion', 20000),
+          nivel: (x) =>
+            v.choice(
+              x,
+              ['inicial', 'intermedio', 'avanzado', 'todos'],
+              'nivel',
+            ),
+          modalidad: (x) =>
+            v.choice(x, ['grabada', 'en_vivo', 'mixta'], 'modalidad'),
+          precioBase: (x) => v.money(x, 'precioBase'),
+          descuentoPorcentaje: (x) => v.money(x, 'descuentoPorcentaje', 9000n),
+          moneda: (x) => v.text(x, 'moneda', 3, 3),
+          portadaArchivoId: (x) => (x === null ? null : v.id(x)),
+        },
+        { allowEmpty: true },
+      );
+      const details = courseDetails(body);
+      ensure(
+        Object.keys(fields).length || Object.keys(details).length,
+        'No hay campos editables.',
+      );
       const pricing = price({ ...course, ...fields }, false);
       if (fields.portadaArchivoId)
         await this.file(
@@ -225,7 +355,12 @@ export class CoursesUseCases extends BaseUseCases {
       const [result] = await tx.store.update(
         'tutorias',
         { id: course.id },
-        { ...fields, ...pricing, versionLock: course.versionLock + 1 },
+        {
+          ...fields,
+          ...details,
+          ...pricing,
+          versionLock: course.versionLock + 1,
+        },
       );
       await this.audit(tx, actor, 'curso.actualizado', 'curso', course.id);
       return result;

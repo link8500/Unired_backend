@@ -81,11 +81,18 @@ export class LearningUseCases extends BaseUseCases {
     return { ...lesson, recursos: resources };
   }
   enrollments(actor: Actor, query: Row) {
-    return this.page(
-      this.db.read.store,
-      'inscripciones_tutoria',
-      { alumnoId: actor.id },
+    const state =
+      query.estado == null
+        ? undefined
+        : v.choice(
+            query.estado,
+            ['activa', 'solicitada', 'completada', 'cancelada', 'revocada'],
+            'estado',
+          );
+    return this.db.read.queries.enrollments(
+      actor.id,
       v.pagination(query),
+      state,
     );
   }
   async enroll(actor: Actor, courseId: unknown): Promise<Row> {
@@ -124,8 +131,10 @@ export class LearningUseCases extends BaseUseCases {
         403,
       );
       const data = {
-        estado: course.precioBase === '0.00' ? 'activa' : 'solicitada',
-        activadaEn: course.precioBase === '0.00' ? new Date() : null,
+        // El precio no concede permisos: solo la aceptación del tutor activa
+        // una solicitud, también cuando el curso es gratuito.
+        estado: 'solicitada',
+        activadaEn: null,
         completadaEn: null,
       };
       const enrollment = existing
@@ -152,7 +161,7 @@ export class LearningUseCases extends BaseUseCases {
         tx,
         course.tutorId,
         'inscripcion',
-        'Nueva inscripción',
+        'Nueva solicitud de acceso a tu tutoría',
         { cursoId: course.id, inscripcionId: enrollment.id },
       );
       return enrollment;
@@ -421,7 +430,40 @@ export class LearningUseCases extends BaseUseCases {
       'tutorId',
       false,
     );
-    return this.db.read.queries.students(v.id(courseId), v.pagination(query));
+    return this.db.read.queries.students(v.id(courseId), {
+      ...v.pagination(query),
+      ...(query.estado === undefined
+        ? {}
+        : {
+            estado: v.choice(
+              query.estado,
+              ['solicitada', 'activa', 'completada', 'cancelada', 'revocada'],
+              'estado',
+            ),
+          }),
+    });
+  }
+
+  /** Una consulta por chat no concede acceso al aula o a los archivos.
+   * Se admite mientras el tutor decide, y se cierra al cancelar o revocar. */
+  async conversationAccess(
+    tx: Transaction,
+    studentId: number,
+    courseId: unknown,
+  ) {
+    const course = await tx.queries.publicCourse(v.id(courseId));
+    ensure(course, 'Tutoría no disponible.', 403);
+    const enrollment = await tx.store.one('inscripciones_tutoria', {
+      tutoriaId: course.id,
+      alumnoId: studentId,
+    });
+    ensure(
+      enrollment &&
+        ['solicitada', 'activa', 'completada'].includes(enrollment.estado),
+      'Envía una solicitud de acceso para conversar con el tutor.',
+      403,
+    );
+    return enrollment;
   }
   async notes(
     actor: Actor,

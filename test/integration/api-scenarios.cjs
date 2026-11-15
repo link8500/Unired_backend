@@ -181,8 +181,31 @@ module.exports = async function scenarios(ctx) {
     'POST',
     '/me/tutor-applications',
     tutor.accessToken,
-    { areaId },
+    {
+      areaId,
+      formacionAcademica: 'Formación de prueba',
+      especialidades: ['Desarrollo web'],
+    },
     201,
+  );
+  assert.deepEqual(application.especialidades, ['Desarrollo web']);
+  const amended = await json(
+    'PATCH',
+    '/me/tutor-applications/' + application.id + '/profile',
+    tutor.accessToken,
+    {
+      versionLock: application.versionLock,
+      experienciaDocente: 'Tres años de acompañamiento',
+    },
+  );
+  Object.assign(application, amended);
+  assert.equal(application.experienciaDocente, 'Tres años de acompañamiento');
+  await json(
+    'PATCH',
+    '/me/tutor-applications/' + application.id + '/profile',
+    intruder.accessToken,
+    { versionLock: application.versionLock, experienciaDocente: 'Intento' },
+    403,
   );
   await json(
     'POST',
@@ -283,6 +306,13 @@ module.exports = async function scenarios(ctx) {
       titulo: 'Curso API de prueba',
       descripcion: 'Curso grabado gratuito de prueba',
       modalidad: 'grabada',
+      portadaArchivoId: null,
+      resumen: 'Introducción al desarrollo de APIs',
+      idioma: 'Inglés',
+      objetivos: ['Diseñar una API'],
+      requisitos: ['Conocimientos básicos'],
+      dirigidoA: 'Estudiantes',
+      duracionEstimadaMinutos: 120,
     },
     201,
   );
@@ -314,6 +344,15 @@ module.exports = async function scenarios(ctx) {
     },
     201,
   );
+  const prepared = await json(
+    'GET',
+    '/me/courses/' + course.id,
+    tutor.accessToken,
+  );
+  assert.equal(prepared.preparacion.acreditacionVigente, true);
+  assert.equal(prepared.preparacion.leccionesPublicadas, 1);
+  assert.equal(prepared.duracionEstimadaMinutos, 1);
+  assert.equal(prepared.idioma, 'Español');
   const published = await json(
     'POST',
     '/me/courses/' + course.id + '/publish',
@@ -322,6 +361,30 @@ module.exports = async function scenarios(ctx) {
     201,
   );
   assert.equal(published.estado, 'publicada');
+  const publicCourse = await json('GET', '/courses/' + course.id);
+  assert.deepEqual(publicCourse.objetivos, ['Diseñar una API']);
+  assert.equal(publicCourse.duracionEstimadaMinutos, 1);
+  const coursePatch = await json(
+    'PATCH',
+    '/me/courses/' + course.id,
+    tutor.accessToken,
+    {
+      versionLock: published.versionLock,
+      resumen: 'Resumen corregido sin reenviar otros campos',
+    },
+  );
+  assert.equal(
+    coursePatch.resumen,
+    'Resumen corregido sin reenviar otros campos',
+  );
+  assert.deepEqual(coursePatch.objetivos, ['Diseñar una API']);
+  await json(
+    'PATCH',
+    '/me/courses/' + course.id,
+    tutor.accessToken,
+    { versionLock: coursePatch.versionLock },
+    400,
+  );
   const otherCourse = await json(
     'POST',
     '/me/courses',
@@ -368,7 +431,89 @@ module.exports = async function scenarios(ctx) {
     undefined,
     201,
   );
-  assert.equal(enrollment.estado, 'activa');
+  assert.equal(enrollment.estado, 'solicitada');
+  assert.equal(enrollment.activadaEn, null);
+  await json(
+    'GET',
+    '/courses/' + course.id + '/lessons/' + lesson.id,
+    student.accessToken,
+    undefined,
+    403,
+  );
+  const requests = await json(
+    'GET',
+    '/me/courses/' + course.id + '/students?estado=solicitada',
+    tutor.accessToken,
+  );
+  assert.ok(requests.items.some((i) => i.id === enrollment.id));
+  await json(
+    'GET',
+    '/me/courses/' + course.id + '/students?estado=inventado',
+    tutor.accessToken,
+    undefined,
+    400,
+  );
+  const pendingChat = await json(
+    'POST',
+    '/courses/' + course.id + '/conversations',
+    student.accessToken,
+    undefined,
+    201,
+  );
+  const pendingMessage = await json(
+    'POST',
+    '/conversations/' + pendingChat.id + '/messages',
+    student.accessToken,
+    {
+      clienteId: crypto.randomUUID(),
+      contenido: 'Mi solicitud está pendiente. ¿Puedes revisarla?',
+    },
+    201,
+  );
+  await json(
+    'PUT',
+    '/conversations/' + pendingChat.id + '/read',
+    tutor.accessToken,
+    { ultimoMensajeId: pendingMessage.id },
+  );
+  const approvalPath =
+    '/me/courses/' + course.id + '/enrollments/' + enrollment.id;
+  for (const token of [
+    student.accessToken,
+    admin.accessToken,
+    intruder.accessToken,
+  ]) {
+    await json(
+      'PATCH',
+      approvalPath,
+      token,
+      { estado: 'activa', motivo: 'Intento sin ser tutor propietario' },
+      403,
+    );
+  }
+  const approvedEnrollment = await json('PATCH', approvalPath, tutor.accessToken, {
+    estado: 'activa',
+    motivo: 'Solicitud revisada y aceptada',
+  });
+  assert.equal(approvedEnrollment.estado, 'activa');
+  assert.ok(approvedEnrollment.activadaEn);
+  assert.equal(
+    (
+      await json(
+        'GET',
+        '/me/courses/' + course.id + '/students?estado=solicitada',
+        tutor.accessToken,
+      )
+    ).total,
+    0,
+  );
+  await json(
+    'PATCH',
+    approvalPath,
+    tutor.accessToken,
+    { estado: 'activa', motivo: 'No aceptar dos veces' },
+    409,
+  );
   const same = await json(
     'POST',
     '/courses/' + course.id + '/enrollments',
@@ -418,6 +563,28 @@ module.exports = async function scenarios(ctx) {
   assert.equal(progress.porcentaje, 100);
   assert.equal(progress.seguimiento.length, 1);
   assert.ok(!JSON.stringify(progress).includes('NOTA PRIVADA'));
+  const learning = await json(
+    'GET',
+    '/me/enrollments?estado=completada',
+    student.accessToken,
+  );
+  const summary = learning.items.find((item) => item.id === enrollment.id);
+  assert.ok(
+    summary,
+    'El curso terminado debe aparecer entre las inscripciones completadas',
+  );
+  assert.equal(summary.cursoTitulo, course.titulo);
+  assert.equal(summary.cursoDisponible, true);
+  assert.equal(summary.totalLecciones, 1);
+  assert.equal(summary.completadas, 1);
+  const otherLearning = await json(
+    'GET',
+    '/me/enrollments',
+    intruder.accessToken,
+  );
+  assert.ok(!otherLearning.items.some((item) => item.id === enrollment.id));
+  const owned = await json('GET', '/me/courses', tutor.accessToken);
+  assert.equal(owned.items.find((item) => item.id === course.id).alumnos, 1);
   await json(
     'GET',
     '/me/courses/' + course.id + '/students',
@@ -485,25 +652,44 @@ module.exports = async function scenarios(ctx) {
     201,
   );
   await request('GET', '/files/' + demo.id + '/content');
-  const resourceFile = await upload(tutor.accessToken, 'recurso_curso', png);
+  const zipBytes = Buffer.from('UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==', 'base64');
+  await upload(
+    intruder.accessToken,
+    'imagen_anuncio',
+    zipBytes,
+    'ejercicio.zip',
+    400,
+  );
+  const zipFile = await upload(
+    tutor.accessToken,
+    'recurso_curso',
+    zipBytes,
+    'ejercicio.zip',
+  );
+  assert.equal(zipFile.mimeDetectado, 'application/zip');
   await json(
     'POST',
     '/me/courses/' + course.id + '/lessons/' + lesson.id + '/resources',
     tutor.accessToken,
-    { archivoId: resourceFile.id, titulo: 'Material privado' },
+    { archivoId: zipFile.id, titulo: 'Código del ejercicio' },
     201,
   );
+  const zipDownload = await request(
+    'GET',
+    '/files/' + zipFile.id + '/content',
+    student.accessToken,
+  );
+  const authorCourse = await json('GET', '/me/courses/' + course.id, tutor.accessToken);
+  const authorLesson = authorCourse.lecciones.find((row) => row.id === lesson.id);
+  assert.ok(authorLesson.recursos.some((row) => row.archivoId === zipFile.id && row.nombreOriginal === 'ejercicio.zip'));
+  assert.ok(authorLesson.recursos.every((row) => !Object.hasOwn(row, 'storageKey')));
+  assert.match(zipDownload.headers.get('content-disposition'), /^attachment/);
   await request(
     'GET',
-    '/files/' + resourceFile.id + '/content',
+    '/files/' + zipFile.id + '/content',
     intruder.accessToken,
     undefined,
     403,
-  );
-  await request(
-    'GET',
-    '/files/' + resourceFile.id + '/content',
-    student.accessToken,
   );
   const videoPath = path.join(ctx.temporary, 'fixture.mp4');
   const ffmpeg =
@@ -573,6 +759,79 @@ module.exports = async function scenarios(ctx) {
   });
   checks++;
   assert.equal(partial.status, 206);
+  // No basta con conocer el ID ni disponer de un enlace antiguo al archivo.
+  const secondRequest = await json(
+    'POST',
+    '/courses/' + course.id + '/enrollments',
+    student2.accessToken,
+    undefined,
+    201,
+  );
+  assert.equal(secondRequest.estado, 'solicitada');
+  await json(
+    'GET',
+    '/courses/' + course.id + '/lessons/' + videoLesson.id,
+    student2.accessToken,
+    undefined,
+    403,
+  );
+  await request(
+    'GET',
+    '/files/' + video.id + '/content',
+    student2.accessToken,
+    undefined,
+    403,
+  );
+  await json(
+    'POST',
+    '/files/' + video.id + '/access',
+    student2.accessToken,
+    undefined,
+    403,
+  );
+  await request(
+    'GET',
+    '/files/' + zipFile.id + '/content',
+    student2.accessToken,
+    undefined,
+    403,
+  );
+  await json(
+    'PATCH',
+    '/me/courses/' + course.id + '/enrollments/' + secondRequest.id,
+    tutor.accessToken,
+    {
+      estado: 'activa',
+      motivo: 'Acceso autorizado después de revisar la solicitud',
+    },
+  );
+  await request(
+    'GET',
+    '/files/' + zipFile.id + '/content',
+    student2.accessToken,
+  );
+  const priorAccess = await json(
+    'POST',
+    '/files/' + video.id + '/access',
+    student2.accessToken,
+    undefined,
+    201,
+  );
+  await json(
+    'PATCH',
+    '/me/courses/' + course.id + '/enrollments/' + secondRequest.id,
+    tutor.accessToken,
+    { estado: 'revocada', motivo: 'Fin de la autorización de prueba' },
+  );
+  await request('GET', ctx.base + priorAccess.url, undefined, undefined, 403);
+  const courseOutline = await json('GET', '/courses/' + course.id);
+  assert.ok(courseOutline.leccionesTotal >= 2);
+  assert.ok(courseOutline.recursosTotal >= 1);
+  const outlineVideo = courseOutline.secciones
+    .flatMap((s) => s.lecciones)
+    .find((l) => l.id === videoLesson.id);
+  assert.ok(outlineVideo.duracionSegundos >= 2);
+  assert.equal(outlineVideo.videoArchivoId, undefined);
   assert.equal((await partial.arrayBuffer()).byteLength, 32);
   assert.ok(partial.headers.get('content-range').startsWith('bytes 0-31/'));
   const wrongFile =
@@ -630,20 +889,22 @@ module.exports = async function scenarios(ctx) {
     { versionLock: liveCourse.versionLock },
     201,
   );
-  await json(
-    'POST',
-    '/courses/' + liveCourse.id + '/enrollments',
-    student.accessToken,
-    undefined,
-    201,
-  );
-  await json(
-    'POST',
-    '/courses/' + liveCourse.id + '/enrollments',
-    student2.accessToken,
-    undefined,
-    201,
-  );
+  for (const person of [student, student2]) {
+    const liveEnrollment = await json(
+      'POST',
+      '/courses/' + liveCourse.id + '/enrollments',
+      person.accessToken,
+      undefined,
+      201,
+    );
+    assert.equal(liveEnrollment.estado, 'solicitada');
+    await json(
+      'PATCH',
+      '/me/courses/' + liveCourse.id + '/enrollments/' + liveEnrollment.id,
+      tutor.accessToken,
+      { estado: 'activa', motivo: 'Admisión a la clase en vivo' },
+    );
+  }
   const agenda = await json('GET', '/courses/' + liveCourse.id + '/sessions');
   assert.equal(agenda.items[0].enlaceReunion, undefined);
   const reservationUrl =
@@ -676,6 +937,22 @@ module.exports = async function scenarios(ctx) {
     authorizedAgenda.items[0].enlaceReunion,
     'https://example.test/reunion-privada',
   );
+  const agendaReadiness = await json(
+    'GET',
+    '/me/courses/' + liveCourse.id,
+    tutor.accessToken,
+  );
+  assert.equal(agendaReadiness.preparacion.tieneSesionFutura, true);
+  const bookingsPath =
+    '/me/courses/' +
+    liveCourse.id +
+    '/sessions/' +
+    session.id +
+    '/reservations';
+  const bookings = await json('GET', bookingsPath, tutor.accessToken);
+  assert.equal(bookings.items.length, 1);
+  assert.ok(bookings.items[0].alumnoNombre);
+  await json('GET', bookingsPath, intruder.accessToken, undefined, 403);
   await json('DELETE', '/me/reservations/' + session.id, winner.accessToken);
 
   console.log('Probando anuncios, ofertas, propiedad y conversaciones...');
@@ -691,6 +968,18 @@ module.exports = async function scenarios(ctx) {
       tipoPrecio: 'fijo',
       precioBase: '100.00',
       descuentoPorcentaje: '10.00',
+      ciudad: null,
+      marca: 'Marca de prueba',
+      atributos: {
+        [categories[0].camposDetalle[0].key]: 'Detalle por categoría',
+      },
+      etiquetas: ['estudio', 'oferta'],
+      referenciaPrivada: 'SKU-PRIVADO-987',
+      disponibilidad: 'varias_unidades',
+      modelo: 'Modelo 2026',
+      zonaEntrega: 'Centro',
+      formasEntrega: ['retiro', 'punto_acordado'],
+      detalleEntrega: 'Horario acordado por mensaje',
     },
     201,
   );
@@ -729,6 +1018,21 @@ module.exports = async function scenarios(ctx) {
     400,
   );
   await request('GET', '/files/' + marketImage.id + '/content');
+  const listingPatch = await json(
+    'PATCH',
+    '/me/listings/' + listing.id,
+    tutor.accessToken,
+    { versionLock: visible.versionLock, modelo: 'Modelo actualizado' },
+  );
+  assert.equal(listingPatch.modelo, 'Modelo actualizado');
+  assert.equal(listingPatch.marca, 'Marca de prueba');
+  await json(
+    'PATCH',
+    '/me/listings/' + listing.id,
+    tutor.accessToken,
+    { versionLock: listingPatch.versionLock },
+    400,
+  );
   await request('GET', '/files/' + marketImage.id + '/thumbnail');
   await json('PUT', '/me/favorites/' + listing.id, student.accessToken);
   await json('PUT', '/me/favorites/' + listing.id, student.accessToken);
@@ -743,12 +1047,189 @@ module.exports = async function scenarios(ctx) {
     { contenido: 'Nueva información' },
     201,
   );
+  const publicListing = await json('GET', '/listings/' + listing.id);
+  assert.deepEqual(publicListing.formasEntrega, ['retiro', 'punto_acordado']);
+  assert.equal(publicListing.marca, 'Marca de prueba');
+  assert.equal(publicListing.referenciaPrivada, undefined);
+  assert.deepEqual(publicListing.etiquetas, ['estudio', 'oferta']);
+  assert.equal(publicListing.disponibilidad, 'varias_unidades');
+  assert.equal(
+    publicListing.atributos[categories[0].camposDetalle[0].key],
+    'Detalle por categoría',
+  );
+  await json(
+    'PATCH',
+    '/me/listings/' + listing.id,
+    tutor.accessToken,
+    {
+      versionLock: listingPatch.versionLock,
+      atributos: { claveNoPermitida: 'rechazar' },
+    },
+    400,
+  );
+  const editedPhoto = await upload(tutor.accessToken, 'imagen_anuncio', png);
+  await json(
+    'PUT',
+    '/me/listings/' + listing.id + '/images/' + marketImage.id,
+    intruder.accessToken,
+    { archivoId: editedPhoto.id },
+    403,
+  );
+  await json(
+    'PUT',
+    '/me/listings/' + listing.id + '/images/' + marketImage.id,
+    tutor.accessToken,
+    { archivoId: editedPhoto.id },
+  );
+  assert.equal(
+    (await json('GET', '/listings/' + listing.id)).imagenes[0].archivoId,
+    editedPhoto.id,
+  );
+  await json(
+    'PUT',
+    '/me/listings/' + listing.id + '/images/' + editedPhoto.id,
+    tutor.accessToken,
+    { archivoId: marketImage.id },
+  );
+  console.log('Probando submódulos, inspección y moderación contextual...');
+  for (const section of [
+    'applications',
+    'tutors',
+    'sessions',
+    'participation',
+    'reviews',
+    'market-updates',
+  ]) {
+    const workspace = await json(
+      'GET',
+      '/admin/workspace/' + section,
+      admin.accessToken,
+    );
+    assert.ok(workspace.total > 0, section + ' muestra los datos creados');
+    await json(
+      'GET',
+      '/admin/workspace/' + section,
+      student.accessToken,
+      undefined,
+      403,
+    );
+    assert.ok(!JSON.stringify(workspace).includes('reunion-privada'));
+    assert.ok(!JSON.stringify(workspace).includes('NOTA PRIVADA'));
+  }
+  const inspection = await json(
+    'GET',
+    '/admin/workspace/courses/' + course.id,
+    admin.accessToken,
+  );
+  assert.ok(inspection.lecciones.length > 0);
+  assert.equal(inspection.lecciones[0].contenidoTexto, undefined);
+  assert.equal(inspection.lecciones[0].videoArchivoId, undefined);
+  await json(
+    'GET',
+    '/admin/workspace/courses/' + course.id,
+    student.accessToken,
+    undefined,
+    403,
+  );
+  await json(
+    'GET',
+    '/admin/workspace/sessions?estado=finalizada',
+    admin.accessToken,
+  );
+  await json(
+    'GET',
+    '/admin/workspace/tutors?estado=por_vencer',
+    admin.accessToken,
+  );
+  await json(
+    'GET',
+    '/admin/workspace/tutors?estado=vencida',
+    admin.accessToken,
+  );
+  await json(
+    'GET',
+    '/admin/workspace/reviews?estado=desconocido',
+    admin.accessToken,
+    undefined,
+    400,
+  );
+  const visibilityBody = {
+    estado: 'oculta',
+    motivo: 'Revisión de contenido por moderación',
+  };
+  await json(
+    'PATCH',
+    '/admin/workspace/reviews/' + enrollment.id + '/state',
+    student.accessToken,
+    visibilityBody,
+    403,
+  );
+  await json(
+    'PATCH',
+    '/admin/workspace/reviews/' + enrollment.id + '/state',
+    admin.accessToken,
+    { estado: 'oculta', motivo: 'x' },
+    400,
+  );
+  await json(
+    'PATCH',
+    '/admin/workspace/reviews/' + enrollment.id + '/state',
+    admin.accessToken,
+    visibilityBody,
+  );
+  assert.equal(
+    (
+      await json(
+        'GET',
+        '/admin/workspace/reviews?estado=oculta',
+        admin.accessToken,
+      )
+    ).total,
+    1,
+  );
+  await json(
+    'PATCH',
+    '/admin/workspace/reviews/' + enrollment.id + '/state',
+    admin.accessToken,
+    { ...visibilityBody, estado: 'visible' },
+  );
+  await json(
+    'PATCH',
+    '/admin/workspace/market-updates/' + post.id + '/state',
+    admin.accessToken,
+    visibilityBody,
+  );
+  assert.equal(
+    (await json('GET', '/listings/' + listing.id)).novedades.length,
+    0,
+  );
+  await json(
+    'PATCH',
+    '/admin/workspace/market-updates/' + post.id + '/state',
+    admin.accessToken,
+    { ...visibilityBody, estado: 'visible' },
+  );
   await json(
     'PUT',
     '/me/listings/' + listing.id + '/updates/' + post.id,
     intruder.accessToken,
     { contenido: 'Ataque' },
     403,
+  );
+  const priorInbox = await json(
+    'GET',
+    '/me/conversations',
+    student.accessToken,
+  );
+  const contactState = await json(
+    'GET',
+    '/listings/' + listing.id + '/contact',
+    student.accessToken,
+  );
+  assert.equal(contactState.mensajeEnviado, false);
+  assert.equal(
+    (await json('GET', '/me/conversations', student.accessToken)).total,
+    priorInbox.total,
   );
   const chats = await Promise.all([
     json(
@@ -768,6 +1249,43 @@ module.exports = async function scenarios(ctx) {
   ]);
   assert.equal(chats[0].id, chats[1].id);
   const chat = chats[0];
+  assert.equal(
+    (await json('GET', '/conversations/' + chat.id, student.accessToken))
+      .recursoTitulo,
+    'Artículo de prueba',
+  );
+  const chatContext = await json('GET','/conversations/'+chat.id,student.accessToken);
+  const listingContext = await json('GET','/listings/'+listing.id);
+  assert.equal(chatContext.recursoTitulo,listingContext.titulo);
+  assert.equal(chatContext.recursoDescripcion,listingContext.descripcion.slice(0,1000));
+  assert.equal(chatContext.recursoPrecioBase,listingContext.precioBase);
+  assert.equal(chatContext.recursoImagenId,listingContext.imagenes[0].archivoId);
+  assert.equal(chatContext.referenciaPrivada,undefined);
+  assert.equal(chatContext.email,undefined);
+  await json(
+    'GET',
+    '/conversations/' + chat.id,
+    admin.accessToken,
+    undefined,
+    403,
+  );
+  await json(
+    'GET',
+    '/conversations/' + chat.id,
+    intruder.accessToken,
+    undefined,
+    403,
+  );
+  assert.equal(
+    (
+      await json(
+        'GET',
+        '/me/conversations?tipo=market&q=alumno',
+        tutor.accessToken,
+      )
+    ).total,
+    1,
+  );
   await json(
     'GET',
     '/conversations/' + chat.id + '/messages',
@@ -784,12 +1302,36 @@ module.exports = async function scenarios(ctx) {
   );
   const nonce = crypto.randomUUID();
   const messageBody = { clienteId: nonce, contenido: 'Mensaje privado' };
-  const message = await json(
+  const inquiries = await Promise.all(
+    [0, 1].map(() =>
+      json(
+        'POST',
+        '/listings/' + listing.id + '/inquiry',
+        student.accessToken,
+        messageBody,
+        201,
+      ),
+    ),
+  );
+  const message = inquiries[0].mensaje;
+  assert.equal(message.id, inquiries[1].mensaje.id);
+  const secondTab = await json(
     'POST',
-    '/conversations/' + chat.id + '/messages',
+    '/listings/' + listing.id + '/inquiry',
     student.accessToken,
-    messageBody,
+    { ...messageBody, clienteId: crypto.randomUUID() },
     201,
+  );
+  assert.equal(secondTab.mensaje.id, message.id);
+  assert.equal(
+    (
+      await json(
+        'GET',
+        '/listings/' + listing.id + '/contact',
+        student.accessToken,
+      )
+    ).mensajeEnviado,
+    true,
   );
   const retry = await json(
     'POST',
@@ -799,6 +1341,104 @@ module.exports = async function scenarios(ctx) {
     201,
   );
   assert.equal(message.id, retry.id);
+  const inbox = await json(
+    'GET',
+    '/me/conversations?noLeidos=true',
+    tutor.accessToken,
+  );
+  assert.equal(inbox.total, 1);
+  assert.equal(inbox.items[0].ultimoMensaje, 'Mensaje privado');
+  assert.equal(inbox.items[0].noLeidos, 1);
+  // La revisión administrativa no suplanta participantes ni marca lecturas.
+  for (const token of [student.accessToken, intruder.accessToken]) {
+    await json('GET', '/admin/conversations', token, undefined, 403);
+    await json(
+      'GET',
+      '/admin/conversations/' + chat.id + '/messages',
+      token,
+      undefined,
+      403,
+    );
+  }
+  const reviewed = await json(
+    'GET',
+    '/admin/conversations?tipo=market&q=Artículo&usuarioId=' + student.id,
+    admin.accessToken,
+  );
+  assert.ok(reviewed.items.some((c) => c.id === chat.id));
+  const reviewHeader = await json(
+    'GET',
+    '/admin/conversations/' + chat.id,
+    admin.accessToken,
+  );
+  assert.equal(reviewHeader.soloLectura, true);
+  assert.equal(reviewHeader.recursoTitulo, 'Artículo de prueba');
+  const reviewHistory = await json(
+    'GET',
+    '/admin/conversations/' + chat.id + '/messages',
+    admin.accessToken,
+  );
+  assert.equal(reviewHistory.items[0].contenido, 'Mensaje privado');
+  const afterReview = await json(
+    'GET',
+    '/me/conversations?noLeidos=true',
+    tutor.accessToken,
+  );
+  assert.equal(afterReview.items.find((c) => c.id === chat.id).noLeidos, 1);
+  await json(
+    'POST',
+    '/conversations/' + chat.id + '/messages',
+    admin.accessToken,
+    { clienteId: crypto.randomUUID(), contenido: 'Sin suplantación' },
+    403,
+  );
+  const courseChat = await json(
+    'POST',
+    '/courses/' + course.id + '/conversations',
+    student.accessToken,
+    undefined,
+    201,
+  );
+  const courseMessage = await json(
+    'POST',
+    '/conversations/' + courseChat.id + '/messages',
+    student.accessToken,
+    { clienteId: crypto.randomUUID(), contenido: 'Consulta sobre una lección' },
+    201,
+  );
+  const courseReviews = await json(
+    'GET',
+    '/admin/conversations?tipo=tutoria',
+    admin.accessToken,
+  );
+  assert.ok(courseReviews.items.some((c) => c.id === courseChat.id));
+  assert.ok(courseReviews.items.every((c) => c.tipo === 'tutoria'));
+  const courseHistory = await json(
+    'GET',
+    '/admin/conversations/' + courseChat.id + '/messages',
+    admin.accessToken,
+  );
+  assert.ok(courseHistory.items.some((m) => m.id === courseMessage.id));
+  const attachment = await upload(student.accessToken, 'adjunto_chat', png);
+  await json(
+    'POST',
+    '/conversations/' + courseChat.id + '/messages',
+    student.accessToken,
+    { clienteId: crypto.randomUUID(), archivoId: attachment.id },
+    201,
+  );
+  await request(
+    'GET',
+    '/files/' + attachment.id + '/content',
+    admin.accessToken,
+  );
+  await request(
+    'GET',
+    '/files/' + attachment.id + '/content',
+    intruder.accessToken,
+    undefined,
+    403,
+  );
   await json(
     'POST',
     '/conversations/' + chat.id + '/messages',
@@ -842,6 +1482,12 @@ module.exports = async function scenarios(ctx) {
   );
   assert.equal(history.items[0].contenido, null);
   assert.equal(history.items[0].archivoId, null);
+  const removedReview = await json(
+    'GET',
+    '/admin/conversations/' + chat.id + '/messages',
+    admin.accessToken,
+  );
+  assert.equal(removedReview.items[0].contenido, null);
 
   console.log(
     'Probando moderación, notificaciones y revocación de sesiones...',

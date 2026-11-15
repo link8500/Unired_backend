@@ -1,5 +1,20 @@
 /** Configuración del proceso: se comprueba antes de abrir el servidor. */
+export function emailVerificationRequired(): boolean {
+  const value = process.env.REQUIRE_EMAIL_VERIFICATION ?? 'true';
+  if (!['true', 'false'].includes(value))
+    throw new Error('REQUIRE_EMAIL_VERIFICATION debe ser true o false.');
+  if (
+    value === 'false' &&
+    !['development', 'test'].includes(process.env.NODE_ENV ?? '')
+  )
+    throw new Error(
+      'Solo se permite desactivar la verificación de correo en development o test.',
+    );
+  return value === 'true';
+}
+
 export function validateRuntime(): void {
+  emailVerificationRequired();
   for (const [key, fallback, max] of [
     ['PORT', '3000', 65535],
     ['UPLOAD_IMAGE_MAX_BYTES', '10485760', 104857600],

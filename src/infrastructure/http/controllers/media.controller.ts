@@ -257,8 +257,11 @@ export class MediaController {
     response.setHeader('Accept-Ranges', 'bytes');
     response.setHeader('Cache-Control', 'private, no-store');
     response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    const disposition =
-      file.mimeDetectado === 'application/pdf' ? 'attachment' : 'inline';
+    const disposition = ['application/pdf', 'application/zip'].includes(
+      file.mimeDetectado,
+    )
+      ? 'attachment'
+      : 'inline';
     const name = String(file.nombreOriginal).replace(/[\r\n\0]/g, '_');
     response.setHeader(
       'Content-Disposition',

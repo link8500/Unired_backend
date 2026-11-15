@@ -10,6 +10,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AccreditationUseCases } from '../../../application/accreditation/accreditation.use-cases';
 import { Actor, Row } from '../../../domain/common/contracts';
+import { tutorApplicationFields } from '../../../domain/policies/publication-details';
 import {
   BodyFields,
   CurrentActor,
@@ -22,6 +23,19 @@ import {
 @Controller()
 export class AccreditationController {
   constructor(private readonly accreditation: AccreditationUseCases) {}
+  @Patch('me/tutor-applications/:id/profile')
+  @BodyFields(
+    'Completar formación y experiencia del expediente propio',
+    ['versionLock', ...tutorApplicationFields],
+    ['versionLock'],
+  )
+  editApplication(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.accreditation.editApplication(actor, id, body);
+  }
   @Public()
   @Get('areas')
   @ApiOperation({ summary: 'Áreas activas y requisitos documentales' })
@@ -35,7 +49,11 @@ export class AccreditationController {
     return this.accreditation.mine(actor, query);
   }
   @Post('me/tutor-applications')
-  @BodyFields('Crear expediente de un área', ['areaId'])
+  @BodyFields(
+    'Crear expediente de un área',
+    ['areaId', ...tutorApplicationFields],
+    ['areaId'],
+  )
   create(@CurrentActor() actor: Actor, @Body() body: unknown) {
     return this.accreditation.create(actor, body);
   }

@@ -54,13 +54,25 @@ export interface Store {
   remove(entity: EntityName, where: Where): Promise<void>;
 }
 export interface Queries {
+  adminConversations(query: Pagination & Row): Promise<Page>;
   catalog(kind: 'courses' | 'listings', query: Pagination & Row): Promise<Page>;
   publicCourse(id: string): Promise<PublicCourse | undefined>;
   publicListing(id: string): Promise<PublicListing | undefined>;
-  conversations(userId: number, query: Pagination): Promise<Page>;
-  students(courseId: string, query: Pagination): Promise<Page>;
+  conversations(userId: number, query: Pagination & Row): Promise<Page>;
+  students(courseId: string, query: Pagination & Row): Promise<Page>;
+  enrollments(userId: number, query: Pagination, state?: string): Promise<Page>;
+  courseDuration(id: string): Promise<number | null>;
+  ownedCourses(userId: number, query: Pagination): Promise<Page>;
   dashboard(): Promise<Row>;
   analytics(days: number): Promise<Row>;
+  workspace(section: string, query: Pagination & Row): Promise<Page>;
+  courseInspection(courseId: string): Promise<Row>;
+  adminUsers(query: Pagination & Row): Promise<Page>;
+  adminUserSummary(userId: number): Promise<Row>;
+  adminPublications(
+    kind: 'courses' | 'listings',
+    query: Pagination & Row,
+  ): Promise<Page>;
 }
 export interface Transaction {
   store: Store;

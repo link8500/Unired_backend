@@ -41,7 +41,7 @@ export class LearningController {
   @Post('courses/:id/enrollments')
   @ApiOperation({
     summary:
-      'Inscribirme: gratis activo; importe mayor que cero solicita alta manual',
+      'Solicitar acceso: requiere aceptación del tutor, incluso si es gratuito',
   })
   enroll(@CurrentActor() actor: Actor, @Param('id') id: string) {
     return this.learning.enroll(actor, id);
