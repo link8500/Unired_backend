@@ -25,6 +25,7 @@ jobs:
       JWT_ACCESS_SECRET: clave-ficticia-solo-ci-no-usar-en-produccion-123456
       MAIL_ENCRYPTION_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
       MAIL_TRANSPORT: file
+      STORAGE_PROVIDER: local
       REQUIRE_EMAIL_VERIFICATION: 'true'
     steps:
       - uses: actions/checkout@v7

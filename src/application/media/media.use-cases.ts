@@ -150,8 +150,8 @@ export class MediaUseCases extends BaseUseCases {
         return tx.store.insert('archivos', {
           propietarioId: actor.id,
           proposito: purpose,
-          proveedor: 'local',
-          storageBucket: 'private-media',
+          proveedor: this.storage.provider,
+          storageBucket: this.storage.bucket,
           storageKey: stored.key,
           extension: extensions[detected.mime],
           nombreOriginal: v.text(originalName, 'nombreArchivo', 255),
@@ -169,7 +169,11 @@ export class MediaUseCases extends BaseUseCases {
       await this.storage.remove(stored.key);
       throw error;
     }
-    return this.process(actor, file.id);
+    try {
+      return await this.process(actor, file.id);
+    } finally {
+      await this.storage.release(stored.key);
+    }
   }
   async process(actor: Actor, resourceId: unknown): Promise<Row> {
     const file = await this.owned(
@@ -265,6 +269,8 @@ export class MediaUseCases extends BaseUseCases {
         throw new DomainError(problem.status, problem.code, problem.message, {
           archivoId: file.id,
         });
+      } finally {
+        await this.storage.release(file.storageKey);
       }
     }, file.id);
   }
@@ -590,10 +596,15 @@ export class MediaUseCases extends BaseUseCases {
       return {
         ...variant,
         nombreOriginal: 'thumbnail.webp',
-        path: this.storage.absolute(variant.storageKey),
       };
     }
-    return { ...file, path: this.storage.absolute(file.storageKey) };
+    return file;
+  }
+  async contentSize(file: { storageKey: string }): Promise<number> {
+    return this.storage.size(file.storageKey);
+  }
+  async readContent(file: { storageKey: string }, start: number, end: number) {
+    return this.storage.read(file.storageKey, { start, end });
   }
   async ticket(actor: Actor, resourceId: unknown) {
     const file = await this.download(actor, resourceId);

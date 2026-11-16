@@ -76,6 +76,7 @@ async function main() {
     MAIL_TRANSPORT: 'file',
     MAIL_OUTBOX_ROOT: path.join(temporary, 'mails'),
     STORAGE_ROOT: path.join(temporary, 'storage'),
+    STORAGE_PROVIDER: 'local',
     API_HOST: '127.0.0.1',
     PORT: String(await port()),
     AV_PROVIDER: process.platform === 'win32' ? 'defender' : 'clamav',

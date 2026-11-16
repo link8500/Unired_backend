@@ -1,9 +1,8 @@
 import { Module } from '@nestjs/common';
-import { Database } from '../../domain/common/contracts';
+import { BinaryStorage, Database } from '../../domain/common/contracts';
 import { LearningUseCases } from '../../application/learning/learning.use-cases';
 import { MediaUseCases } from '../../application/media/media.use-cases';
 import { MediaController } from '../http/controllers/media.controller';
-import { PrivateStorageAdapter } from '../storage/private-storage.adapter';
 import { JwtTokens } from '../security/crypto.providers';
 import { LearningModule } from './learning.module';
 
@@ -16,11 +15,11 @@ import { LearningModule } from './learning.module';
       provide: MediaUseCases,
       useFactory: (
         db: Database,
-        storage: PrivateStorageAdapter,
+        storage: BinaryStorage,
         tokens: JwtTokens,
         learning: LearningUseCases,
       ) => new MediaUseCases(db, storage, tokens, learning),
-      inject: ['DATABASE', PrivateStorageAdapter, JwtTokens, LearningUseCases],
+      inject: ['DATABASE', 'BINARY_STORAGE', JwtTokens, LearningUseCases],
     },
   ],
   exports: [MediaUseCases],

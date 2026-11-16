@@ -32,10 +32,37 @@ function run(
 }
 /** Storage privado, lectura por permisos y pipelines locales reales (sin simulación). */
 export class PrivateStorageAdapter implements BinaryStorage {
-  readonly root = resolve(process.env.STORAGE_ROOT ?? './storage');
-  readonly uploadRoot = resolve(this.root, '_uploads');
+  readonly provider = 'local' as const;
+  readonly bucket = 'private-media';
+  readonly root: string;
+  readonly uploadRoot: string;
+  constructor(
+    root = resolve(process.env.STORAGE_ROOT ?? './storage'),
+    uploadRoot = resolve(root, '_uploads'),
+  ) {
+    this.root = resolve(root);
+    this.uploadRoot = resolve(uploadRoot);
+  }
   private processing = 0;
   private readonly inFlight = new Set<string>();
+  async size(key: string): Promise<number> {
+    try {
+      return (await stat(this.absolute(key))).size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      throw new DomainError(
+        404,
+        'OBJECT_NOT_FOUND',
+        'El objeto físico no está disponible.',
+      );
+    }
+  }
+  async read(key: string, range: { start: number; end: number }) {
+    return createReadStream(this.absolute(key), range);
+  }
+  async release(_key: string): Promise<void> {
+    // En desarrollo el original local es permanente; no se elimina al procesarlo.
+  }
   absolute(key: string): string {
     ensure(
       /^[a-z0-9/_-]+\.[a-z0-9]{1,12}$/.test(key) && !key.startsWith('/'),

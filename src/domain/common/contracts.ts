@@ -116,6 +116,8 @@ export interface StoredFile {
   sha256: Buffer;
 }
 export interface BinaryStorage {
+  readonly provider: 'local' | 's3';
+  readonly bucket: string;
   put(
     path: string,
     folder: string,
@@ -130,7 +132,12 @@ export interface BinaryStorage {
   }>;
   scan(key: string): Promise<void>;
   probeVideo(key: string): Promise<{ duration: number }>;
-  absolute(key: string): string;
+  size(key: string): Promise<number>;
+  read(
+    key: string,
+    range: { start: number; end: number },
+  ): Promise<AsyncIterable<Uint8Array>>;
+  release(key: string): Promise<void>;
   remove(key: string): Promise<void>;
   thumbnail(
     key: string,

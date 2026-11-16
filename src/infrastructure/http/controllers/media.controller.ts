@@ -23,8 +23,8 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import { diskStorage } from 'multer';
 import { randomUUID } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { mkdir, stat, unlink } from 'node:fs/promises';
+import { Readable } from 'node:stream';
+import { mkdir, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { Response } from 'express';
 import {
@@ -192,7 +192,7 @@ export class MediaController {
   }
   private async stream(
     file: {
-      path: string;
+      storageKey: string;
       tamanoBytes: string;
       mimeDetectado: string;
       nombreOriginal: string;
@@ -200,16 +200,7 @@ export class MediaController {
     range: string | undefined,
     response: Response,
   ): Promise<void> {
-    let actualSize: number;
-    try {
-      actualSize = (await stat(file.path)).size;
-    } catch {
-      throw new DomainError(
-        404,
-        'OBJECT_NOT_FOUND',
-        'El objeto físico no está disponible.',
-      );
-    }
+    const actualSize = await this.media.contentSize(file);
     const size = Number(file.tamanoBytes);
     ensure(
       actualSize === size && size > 0,
@@ -252,6 +243,11 @@ export class MediaController {
         'bytes ' + start + '-' + end + '/' + size,
       );
     }
+    // Abre el objeto después de autorizar y antes de enviar cabeceras HTTP.
+    // La lectura remota pide únicamente el rango solicitado por el reproductor.
+    const stream = Readable.from(
+      await this.media.readContent(file, start, end),
+    );
     response.setHeader('Content-Type', file.mimeDetectado);
     response.setHeader('Content-Length', String(end - start + 1));
     response.setHeader('Accept-Ranges', 'bytes');
@@ -267,7 +263,6 @@ export class MediaController {
       'Content-Disposition',
       disposition + "; filename*=UTF-8''" + encodeURIComponent(name),
     );
-    const stream = createReadStream(file.path, { start, end });
     stream.on('error', () => {
       if (!response.headersSent) response.status(500).end();
       else response.destroy();
