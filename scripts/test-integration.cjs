@@ -151,7 +151,7 @@ async function main() {
         'node_modules/typeorm/cli.js',
         'migration:run',
         '-d',
-        'dist/infrastructure/database/data-source.js',
+        'dist/shared/base_datos/origen-datos.js',
       ],
       env,
     );
@@ -172,7 +172,7 @@ async function main() {
     console.log('Creando administrador ficticio por consola...');
     await command(
       process.execPath,
-      ['dist/infrastructure/cli/create-admin.js'],
+      ['dist/shared/cli/crear-admin.js'],
       {
         ...env,
         BOOTSTRAP_ADMIN_EMAIL: 'admin@example.test',

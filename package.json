@@ -23,10 +23,10 @@
     "setup:media": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-media.ps1",
     "docker:up": "docker compose up -d --wait --wait-timeout 60 postgres",
     "docker:down": "docker compose down",
-    "db:migrate": "npm run build && node node_modules/typeorm/cli.js migration:run -d dist/infrastructure/database/data-source.js",
+    "db:migrate": "npm run build && node node_modules/typeorm/cli.js migration:run -d dist/shared/base_datos/origen-datos.js",
     "db:check": "node database/design/verificar-diseno.cjs",
     "db:demo": "npm run build && node scripts/seed-demo.cjs",
-    "admin:create": "npm run build && node dist/infrastructure/cli/create-admin.js",
+    "admin:create": "npm run build && node dist/shared/cli/crear-admin.js",
     "architecture:check": "node scripts/check-architecture.cjs",
     "test:integration": "node scripts/test-integration.cjs"
   },

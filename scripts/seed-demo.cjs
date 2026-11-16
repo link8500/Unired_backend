@@ -8,23 +8,23 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const sharp = require('sharp');
-const source = require('../dist/infrastructure/database/data-source').default;
+const source = require('../dist/shared/base_datos/origen-datos').default;
 const {
   PostgresStore,
-} = require('../dist/infrastructure/database/postgres.database');
-const { schema } = require('../dist/infrastructure/database/schema');
+} = require('../dist/shared/base_datos/postgres.database');
+const { schema } = require('../dist/shared/base_datos/esquema');
 const {
-  ScryptPasswords,
-} = require('../dist/infrastructure/security/crypto.providers');
+  ContrasenasScrypt,
+} = require('../dist/shared/seguridad/criptografia.providers');
 const {
-  PrivateStorageAdapter,
-} = require('../dist/infrastructure/storage/private-storage.adapter');
+  AlmacenamientoLocalAdapter,
+} = require('../dist/shared/almacenamiento/almacenamiento-local.adapter');
 const fixture = require('./demo/fixtures.cjs');
 
 const ago = (days) => new Date(Date.now() - days * 86400000);
 const later = (days) => ago(-days);
 const run = crypto.randomUUID();
-const storage = new PrivateStorageAdapter();
+const storage = new AlmacenamientoLocalAdapter();
 const credentials = [];
 const people = fixture.people.map((person, i) => ({ ...person, index: i }));
 const prepared = new Map();
@@ -175,7 +175,7 @@ async function main() {
     console.log(
       'Preparando imágenes, videos y documentos de muestra con antivirus...',
     );
-    const passwords = new ScryptPasswords();
+    const passwords = new ContrasenasScrypt();
     for (const person of people) {
       person.password =
         'UniRed!' + crypto.randomBytes(15).toString('base64url');

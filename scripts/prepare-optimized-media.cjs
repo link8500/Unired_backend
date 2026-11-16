@@ -91,7 +91,7 @@ async function inventory() {
   const { Client } = require('pg');
   const {
     databaseConnection,
-  } = require('../dist/infrastructure/database/database.config');
+  } = require('../dist/shared/base_datos/conexion.config');
   const { username, ...connection } = databaseConnection();
   const client = new Client({ ...connection, user: username });
   try {

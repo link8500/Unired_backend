@@ -1,0 +1,187 @@
+// Archivo: src/models/mensajeria/controllers/mensajeria.controller.ts
+// Controlador HTTP de mensajeria; recibe la solicitud y delega en los casos de uso.
+
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { MensajeriaUseCases } from '../aplicacion/mensajeria.use-cases';
+import { IdentidadUseCases } from '../../identidad/aplicacion/identidad.use-cases';
+import { Actor, Registro } from '../../../core/dominio/comun/contratos';
+import {
+  BodyFields,
+  CurrentActor,
+  Paged,
+} from '../../../shared/http/comun/decoradores-api';
+
+@ApiTags('Conversaciones privadas')
+@ApiBearerAuth()
+@Controller()
+export class MensajeriaController {
+  constructor(
+    private readonly chat: MensajeriaUseCases,
+    private readonly identity: IdentidadUseCases,
+  ) {}
+  @Get('admin/conversations')
+  @Paged()
+  @ApiOperation({
+    summary: 'Administrador: buscar conversaciones de tutorías y marketplace',
+  })
+  reviewList(@CurrentActor() actor: Actor, @Query() query: Registro) {
+    return this.chat.reviewList(actor, query);
+  }
+  @Get('admin/conversations/:id')
+  @ApiOperation({
+    summary:
+      'Administrador: revisar participantes y contexto con registro de auditoría',
+  })
+  reviewDetails(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.reviewDetails(actor, id);
+  }
+  @Get('admin/conversations/:id/messages')
+  @Paged()
+  @ApiOperation({
+    summary:
+      'Administrador: historial paginado de lectura; no marca mensajes como leídos',
+  })
+  reviewMessages(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Query() query: Registro,
+  ) {
+    return this.chat.reviewMessages(actor, id, query);
+  }
+  @Get('listings/:id/contact')
+  @ApiOperation({
+    summary:
+      'Consultar mi contacto previo sin crear un chat ni enviar mensajes',
+  })
+  contact(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.marketContact(actor, id);
+  }
+  @Post('listings/:id/inquiry')
+  @BodyFields('Confirmar una consulta inicial al vendedor una sola vez', [
+    'clienteId',
+    'contenido',
+  ])
+  inquiry(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.chat.inquire(actor, id, body);
+  }
+  @Post('listings/:id/conversations')
+  @ApiOperation({
+    summary: 'Contactar al vendedor; el destinatario se obtiene del anuncio',
+  })
+  market(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.open(actor, 'market', id);
+  }
+  @Post('courses/:id/conversations')
+  @ApiOperation({ summary: 'Alumno inscrito: conversar con el tutor' })
+  course(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.open(actor, 'tutoria', id);
+  }
+  @Get('me/conversations')
+  @Paged()
+  @ApiOperation({ summary: 'Mis conversaciones no archivadas' })
+  list(@CurrentActor() actor: Actor, @Query() query: Registro) {
+    return this.chat.list(actor, query);
+  }
+  @Get('conversations/:id/messages')
+  @Paged()
+  @ApiOperation({
+    summary:
+      'Historial autorizado; afterId permite sincronizar nuevos mensajes',
+  })
+  messages(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Query() query: Registro,
+  ) {
+    return this.chat.messages(actor, id, query);
+  }
+  @Get('conversations/:id')
+  @ApiOperation({
+    summary:
+      'Cabecera y contexto de una conversación de la que soy participante',
+  })
+  details(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.details(actor, id);
+  }
+  @Post('conversations/:id/messages')
+  @BodyFields(
+    'Enviar mensaje o adjunto propio; clienteId evita duplicados',
+    ['clienteId', 'contenido', 'archivoId'],
+    ['clienteId'],
+  )
+  send(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.chat.send(actor, id, body);
+  }
+  @Put('conversations/:id/read')
+  @BodyFields('Avanzar mi cursor de lectura sin retroceder', [
+    'ultimoMensajeId',
+  ])
+  read(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.chat.read(actor, id, body);
+  }
+  @Delete('conversations/:id/messages/:messageId')
+  @ApiOperation({
+    summary: 'Ocultar mi mensaje sin devolver contenido eliminado',
+  })
+  remove(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.chat.removeMessage(actor, id, messageId);
+  }
+  @Patch('me/conversations/:id')
+  @BodyFields(
+    'Archivar o silenciar solo para mí',
+    ['archivada', 'silenciada'],
+    [],
+  )
+  archive(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.chat.archive(actor, id, body);
+  }
+  @Get('me/blocks')
+  @Paged()
+  @ApiOperation({ summary: 'Usuarios que bloqueé' })
+  blocks(@CurrentActor() actor: Actor, @Query() query: Registro) {
+    return this.chat.blocks(actor, query);
+  }
+  @Put('me/blocks/:id')
+  @ApiOperation({
+    summary: 'Bloquear nuevos contactos y mensajes de este usuario',
+  })
+  block(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.block(actor, id, true);
+  }
+  @Delete('me/blocks/:id')
+  @ApiOperation({ summary: 'Retirar mi bloqueo' })
+  unblock(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.chat.block(actor, id, false);
+  }
+}

@@ -7,10 +7,10 @@ const path = require('node:path');
 const { Client } = require('pg');
 const {
   databaseConnection,
-} = require('../dist/infrastructure/database/database.config');
+} = require('../dist/shared/base_datos/conexion.config');
 const {
-  S3ObjectStore,
-} = require('../dist/infrastructure/storage/s3-object-store');
+  ObjetosS3,
+} = require('../dist/shared/almacenamiento/objetos-s3');
 
 const project = path.resolve(__dirname, '..');
 const root = path.resolve(project, process.env.STORAGE_ROOT || 'storage');
@@ -215,7 +215,7 @@ async function main() {
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
     }
-    store = new S3ObjectStore();
+    store = new ObjetosS3();
     if (
       current.files.some(
         (file) => file.provider === 's3' && file.bucket !== store.bucket,

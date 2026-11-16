@@ -1,3 +1,6 @@
+// Archivo: src/app.controller.spec.ts
+// Pruebas automatizadas del componente app.controller y sus condiciones de error.
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
