@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { DataSource, DataSourceOptions } from 'typeorm';
+import { databaseConnection } from './database.config';
 import { InitialSchema1791504000000 } from './migrations/1791504000000-initial-schema';
 import { ApiSupport1791600000000 } from './migrations/1791600000000-api-support';
 import { UserProfiles1791700000000 } from './migrations/1791700000000-user-profiles';
@@ -7,21 +8,8 @@ import { PublicationDetails1793664000000 } from './migrations/1793664000000-publ
 import { MarketAttributes1793750400000 } from './migrations/1793750400000-market-attributes';
 
 export function databaseOptions(): DataSourceOptions {
-  if (
-    !process.env.DB_PASSWORD ||
-    process.env.DB_PASSWORD === 'CAMBIAR_CON_SETUP_ENV'
-  )
-    throw new Error('Ejecuta npm run setup:env y configura PostgreSQL.');
-  const port = Number(process.env.DB_PORT ?? 5433);
-  if (!Number.isInteger(port) || port < 1 || port > 65535)
-    throw new Error('DB_PORT inválido.');
   return {
-    type: 'postgres',
-    host: process.env.DB_HOST ?? '127.0.0.1',
-    port,
-    username: process.env.DB_USER ?? 'unired',
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME ?? 'unired',
+    ...databaseConnection(),
     entities: [],
     migrations: [
       InitialSchema1791504000000,
@@ -35,7 +23,6 @@ export function databaseOptions(): DataSourceOptions {
     migrationsRun: false,
     migrationsTransactionMode: 'all',
     logging: false,
-    extra: { max: 10, options: '-c timezone=UTC' },
   };
 }
 export default new DataSource(databaseOptions());

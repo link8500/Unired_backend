@@ -60,6 +60,8 @@ async function main() {
   const env = {
     ...process.env,
     NODE_ENV: 'test',
+    DATABASE_URL: '',
+    DB_SSL: 'false',
     REQUIRE_EMAIL_VERIFICATION: process.argv.includes(
       '--email-verification-disabled',
     )
