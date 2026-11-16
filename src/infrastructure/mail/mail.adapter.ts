@@ -4,12 +4,15 @@ import { resolve } from 'node:path';
 import * as nodemailer from 'nodemailer';
 import { DataSource } from 'typeorm';
 import { Mail, Store } from '../../domain/common/contracts';
+import { ResendTransport } from './resend.transport';
 
 /** Outbox cifrado y transaccional. Ningún token de recuperación aparece en la API. */
 export class MailAdapter implements Mail {
   private readonly key: Buffer;
   private timer?: ReturnType<typeof setInterval>;
   private busy = false;
+  private readonly transport: string;
+  private readonly resend?: ResendTransport;
   constructor(private readonly source: DataSource) {
     const raw = process.env.MAIL_ENCRYPTION_KEY;
     if (!raw || !/^[0-9a-f]{64}$/i.test(raw))
@@ -17,12 +20,17 @@ export class MailAdapter implements Mail {
         'Ejecuta npm run setup:env para generar MAIL_ENCRYPTION_KEY.',
       );
     this.key = Buffer.from(raw, 'hex');
-    if (
-      process.env.NODE_ENV === 'production' &&
-      process.env.MAIL_TRANSPORT !== 'smtp'
-    )
+    this.transport = process.env.MAIL_TRANSPORT ?? 'file';
+    if (!['file', 'smtp', 'resend'].includes(this.transport))
+      throw new Error('MAIL_TRANSPORT debe ser file, smtp o resend.');
+    if (process.env.NODE_ENV === 'production' && this.transport === 'file')
       throw new Error(
-        'Configura SMTP para producción; el buzón de archivos es solo de desarrollo.',
+        'Configura resend o smtp para producción; el buzón de archivos es solo de desarrollo.',
+      );
+    if (this.transport === 'resend')
+      this.resend = new ResendTransport(
+        process.env.RESEND_API_KEY ?? '',
+        process.env.MAIL_FROM ?? '',
       );
   }
   async enqueue(
@@ -99,7 +107,14 @@ export class MailAdapter implements Mail {
         if (!mail) return;
         try {
           const text = this.decrypt(mail.cuerpo_cifrado);
-          if ((process.env.MAIL_TRANSPORT ?? 'file') === 'smtp') {
+          if (this.resend) {
+            await this.resend.send({
+              id: mail.id,
+              to: mail.destinatario,
+              subject: mail.asunto,
+              text,
+            });
+          } else if (this.transport === 'smtp') {
             if (!process.env.SMTP_HOST || !process.env.SMTP_FROM)
               throw new Error('SMTP sin configurar.');
             const port = Number(process.env.SMTP_PORT ?? 587);
