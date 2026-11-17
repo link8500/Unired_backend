@@ -4,9 +4,16 @@
 import { INestApplication, RequestMethod } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
-import { json, urlencoded, Response, NextFunction } from 'express';
+import {
+  json,
+  urlencoded,
+  static as archivosPublicos,
+  Response,
+  NextFunction,
+} from 'express';
 import { SolicitudApi } from './comun/solicitud-api';
 import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
 import { ErroresApiFilter } from './comun/errores.filter';
 
 /** Configuración única compartida por arranque y pruebas HTTP. */
@@ -50,6 +57,14 @@ export function configureApp(app: INestApplication): void {
       callback(null, !origin || local || origins.includes(origin));
     },
   });
+  // Archivos públicos de comprobación del sitio, fuera del prefijo de la API.
+  app.use(
+    archivosPublicos(join(__dirname, 'public'), {
+      index: false,
+      redirect: false,
+      dotfiles: 'deny',
+    }),
+  );
   app.setGlobalPrefix('api/v1', {
     exclude: [{ path: '/', method: RequestMethod.GET }],
   });
