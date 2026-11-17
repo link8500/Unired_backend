@@ -18,6 +18,8 @@ import { MarketModule } from './models/market/market.module';
 import { ComunidadModule } from './models/comunidad/comunidad.module';
 import { MultimediaModule } from './models/multimedia/multimedia.module';
 import { AdministracionModule } from './models/administracion/administracion.module';
+import { ComercialModule } from './models/comercial/comercial.module';
+import { InteraccionesModule } from './models/interacciones/interacciones.module';
 
 /** Punto de composición. Cada módulo declara sus controladores y dependencias.
  * core/dominio y los casos de uso siguen sin importar NestJS, HTTP ni PostgreSQL.
@@ -33,6 +35,8 @@ import { AdministracionModule } from './models/administracion/administracion.mod
     MarketModule,
     ComunidadModule,
     AdministracionModule,
+    ComercialModule,
+    InteraccionesModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 600 }]),
   ],
   controllers: [AppController, EstadoController],

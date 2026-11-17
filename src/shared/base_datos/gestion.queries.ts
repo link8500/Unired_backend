@@ -90,6 +90,18 @@ export class GestionQueries {
           where += ` AND r.estado::text=$${values.length}`;
         }
         break;
+      case 'peer-reviews':
+        fields =
+          "r.id,r.puntuacion,r.comentario,CASE WHEN r.visible THEN 'visible' ELSE 'oculta' END AS estado,r.creado_en,u.nombre AS autor_nombre,v.nombre AS receptor_nombre,COALESCE(a.titulo,s.tema,t.titulo) AS contexto";
+        from =
+          ' FROM resenas_interaccion r JOIN usuarios u ON u.id=r.autor_id JOIN usuarios v ON v.id=r.receptor_id LEFT JOIN ofertas_market o ON o.id=r.oferta_id LEFT JOIN anuncios_market a ON a.id=o.anuncio_id LEFT JOIN solicitudes_apoyo s ON s.id=r.solicitud_id LEFT JOIN inscripciones_tutoria i ON i.id=r.inscripcion_id LEFT JOIN tutorias t ON t.id=i.tutoria_id';
+        search = "COALESCE(a.titulo,s.tema,t.titulo,'')";
+        order = 'r.creado_en DESC,r.id DESC';
+        if (p.estado) {
+          values.push(p.estado === 'visible');
+          where += ` AND r.visible=$${values.length}`;
+        }
+        break;
       case 'market-updates':
         fields =
           'n.id,n.anuncio_id,n.contenido,n.creado_en,n.oculta_en,a.titulo AS articulo,u.nombre AS vendedor_nombre';

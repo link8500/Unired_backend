@@ -6,7 +6,15 @@ import { schema } from './esquema';
 
 describe('Adaptador de datos', () => {
   it('incluye columnas enum y todas las entidades vigentes', () => {
-    expect(Object.keys(schema)).toHaveLength(43);
+    expect(Object.keys(schema)).toHaveLength(59);
+    expect(schema.conversaciones.columns.solicitudApoyoId).toBe(
+      'solicitud_apoyo_id',
+    );
+    expect(
+      Object.keys(schema.pagos_demo.columns).some((key) =>
+        /tarjeta|cvv|vencimiento/i.test(key),
+      ),
+    ).toBe(false);
     expect(schema.usuarios.columns.estado).toBe('estado');
     expect(schema.archivos.columns.proposito).toBe('proposito');
     expect(schema.tutorias.columns.modalidad).toBe('modalidad');

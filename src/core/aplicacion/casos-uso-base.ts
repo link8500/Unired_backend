@@ -109,7 +109,7 @@ export class CasosUsoBase {
     return tx.store.insert('notificaciones', {
       usuarioId: userId,
       tipo: type,
-      titulo: title,
+      titulo: title.slice(0, 180),
       datos: data,
     });
   }

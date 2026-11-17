@@ -10,11 +10,16 @@ import {
   Transaccion,
   Filtros,
 } from '../../../core/dominio/comun/contratos';
-import { ensure, missing } from '../../../core/dominio/comun/errores';
+import {
+  ErrorDominio,
+  ensure,
+  missing,
+} from '../../../core/dominio/comun/errores';
 import * as v from '../../../core/dominio/comun/validaciones';
 import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
 import { AprendizajeUseCases } from '../../aprendizaje/aplicacion/aprendizaje.use-cases';
 import { role } from '../../../core/dominio/politicas/acceso';
+import { validarContextoConversacion } from '../../../core/aplicacion/permisos-conversacion';
 
 function publicMessage(message: Registro): Registro {
   if (!message.eliminadoEn) return message;
@@ -112,14 +117,24 @@ export class MensajeriaUseCases extends CasosUsoBase {
       'No puedes contactar a este usuario.',
       403,
     );
-    if (context === 'market')
+    if (context === 'market') {
       ensure(
         (await tx.queries.publicListing(resource.id)) &&
           ['publicado', 'reservado'].includes(resource.estado),
         'Anuncio no disponible para nuevos contactos.',
         409,
       );
-    else await this.learning.conversationAccess(tx, actor.id, resource.id);
+      ensure(
+        await tx.store.one('ofertas_market', {
+          anuncioId: resource.id,
+          compradorId: actor.id,
+          vendedorId: ownerId,
+          estado: 'aceptada',
+        }),
+        'Espera a que el autor acepte tu oferta para conversar.',
+        403,
+      );
+    } else await this.learning.conversationAccess(tx, actor.id, resource.id);
     const key: Filtros =
       context === 'market'
         ? { anuncioId: resource.id, consultanteId: actor.id }
@@ -170,7 +185,22 @@ export class MensajeriaUseCases extends CasosUsoBase {
         conversacionId: conversation.id,
         autorId: actor.id,
       }));
-    return { conversacionId: conversation?.id ?? null, mensajeEnviado: !!sent };
+    const offer = await this.db.read.store.one(
+      'ofertas_market',
+      { anuncioId: listing.id, compradorId: actor.id },
+      { order: { id: 'DESC' } },
+    );
+    return {
+      conversacionId:
+        offer?.estado === 'aceptada'
+          ? (offer.conversacionId ?? conversation?.id ?? null)
+          : null,
+      mensajeEnviado: !!sent,
+      oferta: offer ?? null,
+      importeSugerido: listing.precioBase,
+      moneda: listing.moneda,
+      tipoPublicacion: listing.tipoPublicacion ?? 'venta',
+    };
   }
 
   /** Confirmación explícita del comprador. El bloqueo evita repetir el primer
@@ -219,7 +249,17 @@ export class MensajeriaUseCases extends CasosUsoBase {
       incluirArchivadas: true,
     });
     if (!result.items.length) missing('Conversación no disponible.');
-    return result.items[0];
+    try {
+      await validarContextoConversacion(this.db.read, c);
+      return result.items[0];
+    } catch (error) {
+      if (!(error instanceof ErrorDominio)) throw error;
+      return {
+        ...result.items[0],
+        estado: 'cerrada',
+        motivoCierre: error.message,
+      };
+    }
   }
   async messages(actor: Actor, conversationId: unknown, query: Registro) {
     const conversation = await this.participant(
@@ -227,6 +267,12 @@ export class MensajeriaUseCases extends CasosUsoBase {
       actor,
       conversationId,
     );
+    ensure(
+      conversation.estado === 'abierta',
+      'Esta conversación finalizó. Puedes consultar el perfil del otro participante.',
+      403,
+    );
+    await validarContextoConversacion(this.db.read, conversation);
     return this.history(conversation.id, query);
   }
   reviewList(actor: Actor, query: Registro) {
@@ -356,19 +402,14 @@ export class MensajeriaUseCases extends CasosUsoBase {
       'La conversación no admite mensajes.',
       403,
     );
+    await validarContextoConversacion(tx, conversation);
     if (conversation.tipo === 'tutoria') {
-      // El chat permite resolver la solicitud pendiente, sin liberar material.
       const student = await tx.store.one('usuarios', {
         id: conversation.consultanteId,
         estado: 'activo',
         eliminadoEn: null,
       });
       ensure(student, 'El alumno no está disponible.', 403);
-      await this.learning.conversationAccess(
-        tx,
-        Number(conversation.consultanteId),
-        conversation.tutoriaId,
-      );
     }
     if (initialOnly) {
       const previous = await tx.store.one('mensajes', {

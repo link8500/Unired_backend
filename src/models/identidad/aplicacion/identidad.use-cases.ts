@@ -14,6 +14,7 @@ import {
 import { ensure, missing } from '../../../core/dominio/comun/errores';
 import { Usuarios, TokensCuenta } from '../../../core/dominio/comun/entidades';
 import * as v from '../../../core/dominio/comun/validaciones';
+import { IdentidadSocial } from '../../../core/dominio/comun/acceso-social';
 import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
 import { preserveAdministrator } from '../../../core/aplicacion/seguridad-administrativa';
 import {
@@ -44,6 +45,7 @@ export class IdentidadUseCases extends CasosUsoBase {
     private readonly tokens: Tokens,
     private readonly mail: Correo,
     private readonly requireEmailVerification = true,
+    private readonly frontendUrl?: string,
   ) {
     super(db);
   }
@@ -83,6 +85,13 @@ export class IdentidadUseCases extends CasosUsoBase {
         Date.now() + (purpose === 'verificar_email' ? 86400000 : 3600000),
       ),
     });
+    const link = this.frontendUrl
+      ? this.frontendUrl +
+        '/#/' +
+        (purpose === 'verificar_email' ? 'verify-email' : 'recover') +
+        '?token=' +
+        encodeURIComponent(token)
+      : undefined;
     await this.mail.enqueue(
       tx.store,
       user.email,
@@ -93,7 +102,11 @@ export class IdentidadUseCases extends CasosUsoBase {
         purpose +
         ': ' +
         token +
-        '\nNo compartas este token. Usa el endpoint de confirmación indicado en la documentación de la API.',
+        (link ? '\n\nAbre este enlace para continuar:\n' + link : '') +
+        '\n\nNo compartas este código. ' +
+        (purpose === 'verificar_email'
+          ? 'El enlace vence en 24 horas.'
+          : 'El enlace vence en una hora. Si no solicitaste el cambio, ignora este correo.'),
     );
   }
   private async consumeToken(
@@ -217,25 +230,162 @@ export class IdentidadUseCases extends CasosUsoBase {
           locked.id,
         );
       }
-      const sid = this.tokens.uuid();
-      const refreshToken = sid + '.' + this.tokens.random();
-      await tx.store.insert('sesiones_usuario', {
-        id: sid,
-        usuarioId: user.id,
-        refreshTokenHash: this.tokens.digest(refreshToken),
-        expiraEn: new Date(Date.now() + 30 * 86400000),
-      });
-      return {
-        accessToken: await this.tokens.access(user.id, sid),
-        refreshToken,
-        expiresIn: 900,
-        usuario: { ...visible(locked), estado: this.effectiveState(locked) },
-        verificacionEmailRequerida: this.requireEmailVerification,
-        roles: (
-          await tx.store.find('usuario_roles', { usuarioId: user.id })
-        ).map((row) => row.rolCodigo),
-      };
+      return this.newSession(tx, locked);
     });
+  }
+  private async newSession(tx: Transaccion, user: Usuarios): Promise<Registro> {
+    const sid = this.tokens.uuid();
+    const refreshToken = sid + '.' + this.tokens.random();
+    await tx.store.insert('sesiones_usuario', {
+      id: sid,
+      usuarioId: user.id,
+      refreshTokenHash: this.tokens.digest(refreshToken),
+      expiraEn: new Date(Date.now() + 30 * 86400000),
+    });
+    return {
+      accessToken: await this.tokens.access(user.id, sid),
+      refreshToken,
+      expiresIn: 900,
+      usuario: { ...visible(user), estado: this.effectiveState(user) },
+      verificacionEmailRequerida: this.requireEmailVerification,
+      roles: (await tx.store.find('usuario_roles', { usuarioId: user.id })).map(
+        (row) => row.rolCodigo,
+      ),
+    };
+  }
+  /** Identidad ya validada por el proveedor; nunca combina cuentas solo por email. */
+  async externalSession(
+    tx: Transaccion,
+    profile: IdentidadSocial,
+    ownerId?: number,
+    password?: unknown,
+  ): Promise<Registro> {
+    const link = await tx.store.one('identidades_externas', {
+      proveedor: profile.proveedor,
+      sujetoProveedor: profile.sujeto,
+    });
+    let user: Usuarios | undefined;
+    let nuevo = false;
+    if (ownerId !== undefined) {
+      user = await tx.store.one('usuarios', { id: ownerId }, { lock: true });
+      ensure(
+        !link || link.usuarioId === ownerId,
+        'Esta cuenta externa ya está vinculada a otra cuenta UniRed.',
+        409,
+        'SOCIAL_ALREADY_LINKED',
+      );
+    } else if (link)
+      user = await tx.store.one(
+        'usuarios',
+        { id: link.usuarioId },
+        { lock: true },
+      );
+    else {
+      ensure(
+        profile.email,
+        'Facebook no compartió un correo. Crea una cuenta UniRed y vincula Facebook desde Seguridad, o utiliza Google.',
+        400,
+        'SOCIAL_EMAIL_REQUIRED',
+      );
+      const email = v.email(profile.email);
+      user = await tx.store.one('usuarios', { email }, { lock: true });
+      if (user) {
+        ensure(
+          !user.eliminadoEn &&
+            ['activo', 'pendiente_email'].includes(user.estado),
+          'Cuenta no disponible.',
+          403,
+          'SOCIAL_ACCOUNT_UNAVAILABLE',
+        );
+        const credential = await tx.store.one('credenciales_usuario', {
+          usuarioId: user.id,
+        });
+        if (!credential) return { requiereAccesoPrevio: true };
+        if (password === undefined) return { requierePassword: true };
+        if (
+          !(await this.passwords.verify(
+            v.secret(password, 'passwordActual'),
+            credential.passwordHash,
+          ))
+        )
+          return { passwordIncorrecta: true };
+      } else {
+        nuevo = true;
+        user = await tx.store.insert('usuarios', {
+          nombre: v.text(profile.nombre, 'nombre', 180),
+          email,
+          estado:
+            profile.emailVerificado || !this.requireEmailVerification
+              ? 'activo'
+              : 'pendiente_email',
+          emailVerificadoEn: profile.emailVerificado ? new Date() : null,
+        });
+        await tx.store.insert('perfiles_usuario', { usuarioId: user.id });
+        await tx.store.insert('usuario_roles', {
+          usuarioId: user.id,
+          rolCodigo: 'usuario',
+        });
+        if (this.requireEmailVerification && !profile.emailVerificado)
+          await this.sendToken(tx, user, 'verificar_email');
+        await this.audit(
+          tx,
+          undefined,
+          'cuenta.registrada_social',
+          'usuario',
+          user.id,
+          { proveedor: profile.proveedor },
+        );
+      }
+    }
+    ensure(
+      user &&
+        !user.eliminadoEn &&
+        ['activo', 'pendiente_email'].includes(user.estado),
+      'Cuenta no disponible.',
+      403,
+      'SOCIAL_ACCOUNT_UNAVAILABLE',
+    );
+    const other = await tx.store.one('identidades_externas', {
+      usuarioId: user.id,
+      proveedor: profile.proveedor,
+    });
+    ensure(
+      !other || other.sujetoProveedor === profile.sujeto,
+      'Ya vinculaste otra cuenta de este proveedor. Desvincúlala desde Seguridad antes de cambiarla.',
+      409,
+      'SOCIAL_ALREADY_LINKED',
+    );
+    if (!link)
+      await tx.store.insert('identidades_externas', {
+        usuarioId: user.id,
+        proveedor: profile.proveedor,
+        sujetoProveedor: profile.sujeto,
+        correoProveedor: profile.email,
+      });
+    if (
+      !user.emailVerificadoEn &&
+      profile.emailVerificado &&
+      user.email === profile.email
+    ) {
+      [user] = await tx.store.update(
+        'usuarios',
+        { id: user.id },
+        { emailVerificadoEn: new Date(), estado: 'activo' },
+      );
+    }
+    await this.audit(
+      tx,
+      undefined,
+      ownerId ? 'cuenta.proveedor_vinculado' : 'cuenta.acceso_social',
+      'usuario',
+      user.id,
+      { proveedor: profile.proveedor },
+    );
+    return {
+      ...(await this.newSession(tx, user)),
+      nuevo,
+      vinculado: ownerId !== undefined,
+    };
   }
   async authenticate(token: string): Promise<Actor> {
     const payload = await this.tokens.verifyAccess(token);
@@ -498,6 +648,11 @@ export class IdentidadUseCases extends CasosUsoBase {
     ).map((entry) => entry.rolCodigo);
     return {
       ...visible(user),
+      tienePassword: Boolean(
+        await this.db.read.store.one('credenciales_usuario', {
+          usuarioId: user.id,
+        }),
+      ),
       estado: this.effectiveState(user),
       verificacionEmailRequerida: this.requireEmailVerification,
       roles,

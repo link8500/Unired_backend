@@ -373,6 +373,7 @@ export interface Conversaciones extends RegistroEntidad {
   tipo: string;
   anuncioId: string | null;
   tutoriaId: string | null;
+  solicitudApoyoId: string | null;
   consultanteId: number;
   propietarioId: number;
   estado: string;
@@ -482,7 +483,38 @@ export interface CorreosSalida extends RegistroEntidad {
   enviadoEn: Date | null;
   creadoEn: Date;
 }
+export interface IdentidadesExternas extends RegistroEntidad {
+  id: string;
+  usuarioId: number;
+  proveedor: string;
+  sujetoProveedor: string;
+  correoProveedor: string | null;
+  creadoEn: Date;
+  actualizadoEn: Date;
+}
+export interface FlujosAccesoSocial extends RegistroEntidad {
+  id: string;
+  proveedor: string;
+  estadoHash: Buffer;
+  retoCliente: string;
+  nonce: string;
+  origenFrontend: string;
+  usuarioVinculacionId: number | null;
+  sesionVinculacionId: string | null;
+  sujetoProveedor: string | null;
+  nombreProveedor: string | null;
+  correoProveedor: string | null;
+  correoVerificado: boolean;
+  codigoHash: Buffer | null;
+  callbackUsadoEn: Date | null;
+  canjeadoEn: Date | null;
+  intentosConfirmacion: number;
+  expiraEn: Date;
+  creadoEn: Date;
+}
 export interface MapaEntidades {
+  identidades_externas: IdentidadesExternas;
+  flujos_acceso_social: FlujosAccesoSocial;
   usuarios: Usuarios;
   roles: Roles;
   usuario_roles: UsuarioRoles;
@@ -526,6 +558,169 @@ export interface MapaEntidades {
   variantes_archivo: VariantesArchivo;
   galeria_tutoria: GaleriaTutoria;
   correos_salida: CorreosSalida;
+}
+export interface Empresa extends RegistroEntidad {
+  id: string;
+  propietarioId: number;
+  nombre: string;
+  razonSocial: string;
+  ruc: string;
+  emailComercial: string;
+  telefono: string;
+  sitioWeb: string | null;
+  descripcion: string;
+  ciudad: string;
+  estado: string;
+  motivoRevision: string | null;
+}
+export interface PlanEmpresa extends RegistroEntidad {
+  id: string;
+  codigo: string;
+  nombre: string;
+  descripcion: string;
+  precioMensual: string;
+  maxCampanas: number;
+  activo: boolean;
+}
+export interface SuscripcionEmpresa extends RegistroEntidad {
+  id: string;
+  empresaId: string;
+  planId: string;
+  pagoId: string;
+  estado: string;
+  iniciaEn: Date;
+  venceEn: Date;
+  canceladaEn: Date | null;
+}
+export interface CampanaPublicitaria extends RegistroEntidad {
+  id: string;
+  empresaId: string;
+  suscripcionId: string;
+  titulo: string;
+  descripcion: string;
+  bannerArchivoId: string;
+  enlace: string;
+  estado: string;
+  iniciaEn: Date;
+  terminaEn: Date;
+}
+export interface PagoDemo extends RegistroEntidad {
+  id: string;
+  usuarioId: number;
+  clienteId: string;
+  concepto: string;
+  recursoId: string | null;
+  importe: string;
+  moneda: string;
+  estado: string;
+  creadoEn: Date;
+}
+export interface CarteraTutor extends RegistroEntidad {
+  usuarioId: number;
+  saldoDemo: string;
+  actualizadoEn: Date;
+}
+export interface MovimientoCartera extends RegistroEntidad {
+  id: string;
+  usuarioId: number;
+  pagoId: string | null;
+  tipo: string;
+  importe: string;
+  descripcion: string;
+  creadoEn: Date;
+}
+export interface DestacadoPublicacion extends RegistroEntidad {
+  id: string;
+  propietarioId: number;
+  anuncioId: string | null;
+  tutoriaId: string | null;
+  pagoId: string;
+  iniciaEn: Date;
+  terminaEn: Date;
+  estado: string;
+}
+export interface ConfiguracionComercial extends RegistroEntidad {
+  id: string;
+  comisionPorcentaje: string;
+  precioDestacado: string;
+  diasDestacado: number;
+  precioMinutoOnline: string;
+  precioMinutoPresencial: string;
+  actualizadoEn: Date;
+}
+export interface MapaEntidades {
+  empresas: Empresa;
+  planes_empresa: PlanEmpresa;
+  suscripciones_empresa: SuscripcionEmpresa;
+  campanas_publicitarias: CampanaPublicitaria;
+  pagos_demo: PagoDemo;
+  carteras_tutor: CarteraTutor;
+  movimientos_cartera: MovimientoCartera;
+  destacados_publicacion: DestacadoPublicacion;
+  configuracion_comercial: ConfiguracionComercial;
+  ofertas_market: OfertaMarket;
+  solicitudes_apoyo: SolicitudApoyo;
+  solicitudes_ignoradas: SolicitudIgnorada;
+  resenas_interaccion: ResenaInteraccion;
+  tarifas_tutoria: TarifaTutoria;
+}
+export interface OfertaMarket extends RegistroEntidad {
+  id: string;
+  anuncioId: string;
+  compradorId: number;
+  vendedorId: number;
+  clienteId: string;
+  tipo: string;
+  importe: string;
+  moneda: string;
+  mensaje: string;
+  estado: string;
+  conversacionId: string | null;
+  creadoEn: Date;
+}
+export interface SolicitudApoyo extends RegistroEntidad {
+  id: string;
+  alumnoId: number;
+  tutorId: number | null;
+  areaId: number;
+  materia: string;
+  tema: string;
+  descripcion: string;
+  universidad: string | null;
+  carrera: string | null;
+  anioEstudio: number | null;
+  modalidad: string;
+  duracionMinutos: number;
+  precio: string;
+  comision: string;
+  moneda: string;
+  estado: string;
+  cursoId: string | null;
+  inscripcionOtorgadaId: string | null;
+  conversacionId: string | null;
+}
+export interface SolicitudIgnorada extends RegistroEntidad {
+  solicitudId: string;
+  tutorId: number;
+  creadoEn: Date;
+}
+export interface ResenaInteraccion extends RegistroEntidad {
+  id: string;
+  autorId: number;
+  receptorId: number;
+  ofertaId: string | null;
+  solicitudId: string | null;
+  inscripcionId: string | null;
+  puntuacion: number;
+  comentario: string;
+  visible: boolean;
+  creadoEn: Date;
+}
+export interface TarifaTutoria extends RegistroEntidad {
+  areaId: number;
+  precioMinutoOnline: string | null;
+  precioMinutoPresencial: string | null;
+  actualizadoEn: Date;
 }
 export type NombreEntidad = keyof MapaEntidades;
 export type CursoPublico = Pick<

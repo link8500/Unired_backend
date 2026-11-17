@@ -10,7 +10,11 @@ import {
   Registro,
 } from '../../../core/dominio/comun/contratos';
 
-function setup(required = true, state = 'pendiente_email') {
+function setup(
+  required = true,
+  state = 'pendiente_email',
+  frontendUrl?: string,
+) {
   const user: Registro = {
     id: 1,
     nombre: 'Usuario de prueba',
@@ -80,10 +84,26 @@ function setup(required = true, state = 'pendiente_email') {
     user,
     inserted,
     mail,
-    identity: new IdentidadUseCases(db, passwords, tokens, mail, required),
+    identity: new IdentidadUseCases(
+      db,
+      passwords,
+      tokens,
+      mail,
+      required,
+      frontendUrl,
+    ),
   };
 }
 describe('Verificación de correo reversible', () => {
+  it('incluye un enlace real a la pantalla de recuperación y conserva el token de un solo uso', async () => {
+    const test = setup(true, 'activo', 'https://unired.example');
+    await test.identity.forgot({ email: 'usuario@example.test' });
+    const message = (test.mail.enqueue as jest.Mock).mock.calls[0][3];
+    expect(message).toContain(
+      'https://unired.example/#/recover?token=token-de-prueba-1234567890',
+    );
+    expect(message).toContain('una hora');
+  });
   it('conserva el registro pendiente y el envío del token cuando está activada', async () => {
     const test = setup();
     const result = await test.identity.register({

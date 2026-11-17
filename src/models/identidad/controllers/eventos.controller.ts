@@ -18,7 +18,7 @@ import {
 import { interval, Observable, of } from 'rxjs';
 import {
   catchError,
-  concatMap,
+  exhaustMap,
   finalize,
   startWith,
   takeWhile,
@@ -55,18 +55,21 @@ export class EventosController {
     @Query() query: Registro,
   ): Observable<MessageEvent> {
     let cursor =
-      query.afterId === undefined && !lastId
+      (query.afterId === undefined && !lastId) ||
+      String(query.afterId ?? lastId) === '0'
         ? '0'
         : v.id(query.afterId ?? lastId);
     ensure(
-      (this.connections.get(actor.id) ?? 0) < 2 && this.connections.size < 50,
+      (this.connections.get(actor.id) ?? 0) < 2 &&
+        (this.connections.has(actor.id) ||
+          this.connections.size < Number(process.env.SSE_MAX_USERS ?? 200)),
       'Límite de conexiones de eventos alcanzado.',
       429,
     );
     this.connections.set(actor.id, (this.connections.get(actor.id) ?? 0) + 1);
     return interval(2000).pipe(
       startWith(0),
-      concatMap(async () => {
+      exhaustMap(async () => {
         const current = await this.identity.authenticate(header.slice(7));
         ensure(current.estado === 'activo', 'Sesión no disponible.', 401);
         const notices = await this.db.read.store.find(

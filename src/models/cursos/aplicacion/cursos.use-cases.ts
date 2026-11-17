@@ -11,6 +11,8 @@ import * as v from '../../../core/dominio/comun/validaciones';
 import { validGrant } from '../../../core/dominio/politicas/acceso';
 import { price } from '../../../core/dominio/politicas/precios';
 import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
+import { cotizarCurso } from '../../../core/aplicacion/cotizacion-tutoria';
+import { filtrosAcademicos } from '../../../core/dominio/politicas/filtros-academicos';
 import {
   courseDetailFields,
   courseDetails,
@@ -27,6 +29,7 @@ export class CursosUseCases extends CasosUsoBase {
   catalog(query: Registro) {
     return this.db.read.queries.catalog('courses', {
       ...v.pagination(query),
+      ...filtrosAcademicos(query),
       ...(query.areaId === undefined ? {} : { areaId: v.userId(query.areaId) }),
       ...(query.tutorId === undefined
         ? {}
@@ -226,6 +229,7 @@ export class CursosUseCases extends CasosUsoBase {
     return {
       ...course,
       duracionEstimadaMinutos: duration,
+      cotizacion: await cotizarCurso(this.db.read, course),
       secciones: sections,
       lecciones: lessons.map((lesson) => ({
         ...lesson,
@@ -290,11 +294,14 @@ export class CursosUseCases extends CasosUsoBase {
         );
       const course = await tx.store.insert('tutorias', {
         ...data,
+        precioBase: '0.00',
+        descuentoPorcentaje: '0.00',
+        moneda: 'NIO',
         portadaArchivoId:
           body.portadaArchivoId == null ? null : v.id(body.portadaArchivoId),
       });
       await this.audit(tx, actor, 'curso.creado', 'curso', course.id);
-      return course;
+      return { ...course, cotizacion: await cotizarCurso(tx, course) };
     });
   }
   async update(
@@ -349,6 +356,7 @@ export class CursosUseCases extends CasosUsoBase {
         'No hay campos editables.',
       );
       const pricing = price({ ...course, ...fields }, false);
+      const quote = await cotizarCurso(tx, course);
       if (fields.portadaArchivoId)
         await this.file(
           tx.store,
@@ -371,11 +379,14 @@ export class CursosUseCases extends CasosUsoBase {
           ...fields,
           ...details,
           ...pricing,
+          precioBase: quote.total,
+          descuentoPorcentaje: '0.00',
+          moneda: quote.moneda,
           versionLock: course.versionLock + 1,
         },
       );
       await this.audit(tx, actor, 'curso.actualizado', 'curso', course.id);
-      return result;
+      return { ...result, cotizacion: quote };
     });
   }
   async publish(
@@ -433,18 +444,26 @@ export class CursosUseCases extends CasosUsoBase {
           }),
           'Programa al menos una sesión futura.',
         );
+      const quote = await cotizarCurso(tx, course);
+      ensure(
+        !quote.pendienteContenido,
+        'Añade contenido con duración válida antes de publicar el curso.',
+      );
       const [result] = await tx.store.update(
         'tutorias',
         { id: course.id },
         {
           estado: 'publicada',
+          precioBase: quote.total,
+          descuentoPorcentaje: '0.00',
+          moneda: quote.moneda,
           habilitacionId: grant!.id,
           publicadaEn: course.publicadaEn ?? new Date(),
           versionLock: course.versionLock + 1,
         },
       );
       await this.audit(tx, actor, 'curso.publicado', 'curso', course.id);
-      return result;
+      return { ...result, cotizacion: quote };
     });
   }
   async changeState(

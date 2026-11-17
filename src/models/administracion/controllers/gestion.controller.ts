@@ -61,4 +61,16 @@ export class GestionController {
   ) {
     return this.workspace.visibility(actor, 'update', id, body);
   }
+  @Patch('peer-reviews/:id/state')
+  @BodyFields(
+    'Moderar una valoración entre participantes con motivo y auditoría',
+    ['estado', 'motivo'],
+  )
+  peerReview(
+    @CurrentActor() actor: Actor,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    return this.workspace.visibility(actor, 'peer-review', id, body);
+  }
 }

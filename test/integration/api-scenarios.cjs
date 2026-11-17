@@ -453,29 +453,8 @@ module.exports = async function scenarios(ctx) {
     undefined,
     400,
   );
-  const pendingChat = await json(
-    'POST',
-    '/courses/' + course.id + '/conversations',
-    student.accessToken,
-    undefined,
-    201,
-  );
-  const pendingMessage = await json(
-    'POST',
-    '/conversations/' + pendingChat.id + '/messages',
-    student.accessToken,
-    {
-      clienteId: crypto.randomUUID(),
-      contenido: 'Mi solicitud está pendiente. ¿Puedes revisarla?',
-    },
-    201,
-  );
-  await json(
-    'PUT',
-    '/conversations/' + pendingChat.id + '/read',
-    tutor.accessToken,
-    { ultimoMensajeId: pendingMessage.id },
-  );
+  // Antes de aceptar, ni el curso gratuito habilita una conversación.
+  await json('POST', '/courses/' + course.id + '/conversations', student.accessToken, undefined, 403);
   const approvalPath =
     '/me/courses/' + course.id + '/enrollments/' + enrollment.id;
   for (const token of [
@@ -1231,6 +1210,8 @@ module.exports = async function scenarios(ctx) {
     (await json('GET', '/me/conversations', student.accessToken)).total,
     priorInbox.total,
   );
+  const offer = await json('POST', '/listings/' + listing.id + '/offers', student.accessToken, {clienteId:crypto.randomUUID(),tipo:'compra',importe:'100.00',mensaje:'Propongo comprar el artículo de prueba.'}, 201);
+  await json('PATCH', '/me/offers/' + offer.id, tutor.accessToken, {estado:'aceptada'});
   const chats = await Promise.all([
     json(
       'POST',
@@ -1394,7 +1375,7 @@ module.exports = async function scenarios(ctx) {
   );
   const courseChat = await json(
     'POST',
-    '/courses/' + course.id + '/conversations',
+    '/courses/' + liveCourse.id + '/conversations',
     student.accessToken,
     undefined,
     201,

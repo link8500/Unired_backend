@@ -6,6 +6,7 @@ import { ensure, missing } from '../../../core/dominio/comun/errores';
 import * as v from '../../../core/dominio/comun/validaciones';
 import { price } from '../../../core/dominio/politicas/precios';
 import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
+import { filtrosAcademicos } from '../../../core/dominio/politicas/filtros-academicos';
 import {
   categoryFields,
   extraMarketDetails,
@@ -32,6 +33,16 @@ export class MarketUseCases extends CasosUsoBase {
   catalog(query: Registro) {
     return this.db.read.queries.catalog('listings', {
       ...v.pagination(query),
+      ...filtrosAcademicos(query),
+      ...(query.tipoPublicacion
+        ? {
+            tipoPublicacion: v.choice(
+              query.tipoPublicacion,
+              ['venta', 'compra', 'intercambio'],
+              'tipoPublicacion',
+            ),
+          }
+        : {}),
       ...(query.categoriaId === undefined
         ? {}
         : { categoriaId: v.userId(query.categoriaId) }),
@@ -417,6 +428,26 @@ export class MarketUseCases extends CasosUsoBase {
         },
       );
       await this.audit(tx, actor, 'anuncio.' + state, 'anuncio', listing.id);
+      if (['vendido', 'archivado'].includes(state)) {
+        await tx.store.update(
+          'conversaciones',
+          { anuncioId: listing.id },
+          { estado: 'cerrada' },
+        );
+        await tx.store.update(
+          'ofertas_market',
+          { anuncioId: listing.id, estado: 'pendiente' },
+          { estado: 'cancelada', resueltaEn: new Date() },
+        );
+        await tx.store.update(
+          'ofertas_market',
+          { anuncioId: listing.id, estado: 'aceptada' },
+          {
+            estado: state === 'vendido' ? 'finalizada' : 'cancelada',
+            resueltaEn: new Date(),
+          },
+        );
+      }
       return result;
     });
   }

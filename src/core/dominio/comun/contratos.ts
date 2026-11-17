@@ -65,6 +65,21 @@ export interface AlmacenDatos {
   remove(entity: NombreEntidad, where: Filtros): Promise<void>;
 }
 export interface Consultas {
+  campaigns(query: Paginacion): Promise<Pagina>;
+  pricingAreas(): Promise<Registro[]>;
+  offers(userId: number, query: Paginacion & Registro): Promise<Pagina>;
+  tutoringRequests(
+    userId: number,
+    query: Paginacion & Registro,
+  ): Promise<Pagina>;
+  reputation(userId: number): Promise<Registro>;
+  reputationReviews(userId: number, query: Paginacion): Promise<Pagina>;
+  notifyTutors(
+    areaId: number,
+    excludedUser: number,
+    title: string,
+    data: Registro,
+  ): Promise<void>;
   adminConversations(query: Paginacion & Registro): Promise<Pagina>;
   catalog(
     kind: 'courses' | 'listings',
@@ -79,7 +94,7 @@ export interface Consultas {
     query: Paginacion,
     state?: string,
   ): Promise<Pagina>;
-  courseDuration(id: string): Promise<number | null>;
+  courseDuration(id: string, publishedOnly?: boolean): Promise<number | null>;
   ownedCourses(userId: number, query: Paginacion): Promise<Pagina>;
   dashboard(): Promise<Registro>;
   analytics(days: number): Promise<Registro>;
@@ -149,6 +164,11 @@ export interface AlmacenamientoBinario {
     duration?: number;
   }>;
   scan(key: string): Promise<void>;
+  /** Decodifica una imagen y genera un WebP nuevo sin metadatos ni bytes del original. */
+  normalizeImage(
+    key: string,
+    folder: string,
+  ): Promise<ArchivoGuardado & { width: number; height: number }>;
   probeVideo(key: string): Promise<{ duration: number }>;
   size(key: string): Promise<number>;
   read(

@@ -6,7 +6,7 @@ NestJS se ejecuta en tu computadora. Docker ejecuta únicamente PostgreSQL.
 
 - Node.js 22 o superior compatible con NestJS 11, y npm.
 - Docker Desktop abierto con contenedores Linux.
-- Para cargas: Windows Defender disponible; en otro sistema configura ClamAV.
+- Para documentos y videos: Windows Defender disponible; en otro sistema configura ClamAV.
 - Para videos: la herramienta local que instala `setup:media` (no instala servicios).
 
 ## Primer arranque
@@ -50,6 +50,16 @@ npm run start:dev
 ```
 
 Si hay migraciones nuevas, ejecuta `npm run db:migrate` antes de iniciar NestJS.
+
+Para arrancar la versión compilada:
+
+```sh
+npm run build
+npm run start:prod
+```
+
+`start:prod` aplica las migraciones pendientes y después inicia la API.
+Este es también el comando de inicio de Render.
 
 ## Conexión y puertos
 

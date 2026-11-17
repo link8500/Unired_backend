@@ -13,6 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { resolve, relative } from 'node:path';
 import { AlmacenamientoLocalAdapter } from './almacenamiento-local.adapter';
+import sharp from 'sharp';
 
 describe('Storage privado', () => {
   let root: string;
@@ -74,5 +75,85 @@ describe('Storage privado', () => {
     release();
     await first;
     expect(await storage.limited(() => Promise.resolve(2), '1')).toBe(2);
+  });
+  it('reconstruye una foto como WebP sin metadatos ni contenido añadido', async () => {
+    const input = resolve(storage.uploadRoot, 'imagen.upload');
+    const png = await sharp({
+      create: { width: 2800, height: 1400, channels: 3, background: '#0075c9' },
+    })
+      .png()
+      .withMetadata()
+      .toBuffer();
+    await writeFile(
+      input,
+      Buffer.concat([
+        png,
+        Buffer.from('contenido que no forma parte de los pixeles'),
+      ]),
+    );
+    const original = await storage.put(
+      input,
+      'market/1/imagen_anuncio',
+      'png',
+      10485760,
+    );
+    const normalized = await storage.normalizeImage(
+      original.key,
+      'imagenes_verificadas/1/imagen_anuncio',
+    );
+    const bytes = await readFile(storage.absolute(normalized.key));
+    const metadata = await sharp(bytes).metadata();
+    expect(metadata.format).toBe('webp');
+    expect(metadata.exif).toBeUndefined();
+    expect(metadata.icc).toBeUndefined();
+    expect(normalized.width).toBe(2400);
+    expect(normalized.height).toBe(1200);
+    expect(bytes.includes(Buffer.from('contenido que no forma parte'))).toBe(
+      false,
+    );
+    expect(createHash('sha256').update(bytes).digest()).toEqual(
+      normalized.sha256,
+    );
+    expect(normalized.bytes).toBe(bytes.length);
+  });
+  it('encola archivos distintos sin perderlos y libera el turno incluso tras un fallo', async () => {
+    const previous = process.env.MEDIA_MAX_JOBS;
+    process.env.MEDIA_MAX_JOBS = '1';
+    try {
+      let release!: () => void;
+      const order: number[] = [];
+      const first = storage.limited(async () => {
+        order.push(1);
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        throw new Error('fallo de un archivo');
+      }, 'cola-1');
+      // Se adjunta el manejador antes de liberar para evitar rechazos sin atender.
+      const checked = expect(first).rejects.toThrow('fallo de un archivo');
+      const next = [2, 3].map((id) =>
+        storage.limited(async () => {
+          order.push(id);
+          return id;
+        }, 'cola-' + id),
+      );
+      expect(order).toEqual([1]);
+      release();
+      await checked;
+      expect(await Promise.all(next)).toEqual([2, 3]);
+      expect(order).toEqual([1, 2, 3]);
+      expect(await storage.limited(async () => 4, 'cola-4')).toBe(4);
+    } finally {
+      if (previous === undefined) delete process.env.MEDIA_MAX_JOBS;
+      else process.env.MEDIA_MAX_JOBS = previous;
+    }
+  });
+  it('rechaza imágenes falsas sin dejar objetos publicables', async () => {
+    const input = resolve(storage.uploadRoot, 'imagen.upload');
+    await writeFile(input, Buffer.from('no es una imagen'));
+    const saved = await storage.put(input, 'market/1', 'jpg', 1000);
+    await expect(
+      storage.normalizeImage(saved.key, 'imagenes_verificadas/1'),
+    ).rejects.toMatchObject({ code: 'INVALID_IMAGE' });
   });
 });

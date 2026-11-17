@@ -9,17 +9,61 @@ import {
   CuentaController,
 } from './controllers/identidad.controller';
 import { EventosController } from './controllers/eventos.controller';
+import { AccesoSocialController } from './controllers/acceso-social.controller';
+import { AccesoSocialUseCases } from './aplicacion/acceso-social.use-cases';
+import { ProveedoresSocialesAdapter } from '../../shared/seguridad/proveedores-sociales.adapter';
+import { LimpiezaAccesoSocial } from '../../shared/seguridad/limpieza-acceso-social';
+import { configuracionSocial } from '../../shared/configuracion/acceso-social';
 import {
   ContrasenasScrypt,
   TokensJwt,
 } from '../../shared/seguridad/criptografia.providers';
 import { CorreoAdapter } from '../../shared/correo/correo.adapter';
-import { emailVerificationRequired } from '../../shared/configuracion/entorno';
+import {
+  emailVerificationRequired,
+  frontendOrigin,
+} from '../../shared/configuracion/entorno';
 
 /** Identidad, cuenta, sesiones y eventos autenticados. */
 @Module({
-  controllers: [IdentidadController, CuentaController, EventosController],
+  controllers: [
+    IdentidadController,
+    CuentaController,
+    EventosController,
+    AccesoSocialController,
+  ],
   providers: [
+    {
+      provide: ProveedoresSocialesAdapter,
+      useFactory: () => new ProveedoresSocialesAdapter(),
+    },
+    {
+      provide: LimpiezaAccesoSocial,
+      useFactory: (db: BaseDatos) => new LimpiezaAccesoSocial(db),
+      inject: ['DATABASE'],
+    },
+    {
+      provide: AccesoSocialUseCases,
+      useFactory: (
+        db: BaseDatos,
+        tokens: TokensJwt,
+        providers: ProveedoresSocialesAdapter,
+        identity: IdentidadUseCases,
+      ) =>
+        new AccesoSocialUseCases(
+          db,
+          tokens,
+          providers,
+          identity,
+          configuracionSocial(),
+        ),
+      inject: [
+        'DATABASE',
+        TokensJwt,
+        ProveedoresSocialesAdapter,
+        IdentidadUseCases,
+      ],
+    },
     {
       provide: IdentidadUseCases,
       useFactory: (
@@ -34,6 +78,7 @@ import { emailVerificationRequired } from '../../shared/configuracion/entorno';
           tokens,
           mail,
           emailVerificationRequired(),
+          frontendOrigin(),
         ),
       inject: ['DATABASE', ContrasenasScrypt, TokensJwt, CorreoAdapter],
     },

@@ -24,6 +24,7 @@ const states: Record<string, readonly string[]> = {
   tutors: ['vigente', 'suspendida', 'revocada', 'vencida', 'por_vencer'],
   sessions: ['programada', 'cancelada', 'finalizada'],
   reviews: ['visible', 'oculta'],
+  'peer-reviews': ['visible', 'oculta'],
   'market-updates': ['visible', 'oculta'],
   participation: [],
 };
@@ -53,7 +54,7 @@ export class GestionUseCases extends CasosUsoBase {
   }
   async visibility(
     actor: Actor,
-    kind: 'review' | 'update',
+    kind: 'review' | 'peer-review' | 'update',
     resourceId: unknown,
     input: unknown,
   ) {
@@ -64,16 +65,22 @@ export class GestionUseCases extends CasosUsoBase {
     const id = v.id(resourceId);
     return this.db.transaction(async (tx) => {
       const table =
-        kind === 'review' ? 'resenas_tutoria' : 'actualizaciones_anuncio';
+        kind === 'peer-review'
+          ? 'resenas_interaccion'
+          : kind === 'review'
+            ? 'resenas_tutoria'
+            : 'actualizaciones_anuncio';
       const where: Filtros = kind === 'review' ? { inscripcionId: id } : { id };
       const current = await tx.store.one(table, where, { lock: true });
       if (!current) missing();
       const [result] = await tx.store.update(
         table,
         where,
-        kind === 'review'
-          ? { estado: state }
-          : { ocultaEn: state === 'oculta' ? new Date() : null },
+        kind === 'peer-review'
+          ? { visible: state === 'visible' }
+          : kind === 'review'
+            ? { estado: state }
+            : { ocultaEn: state === 'oculta' ? new Date() : null },
       );
       await this.audit(tx, actor, `${kind}.${state}`, table, id, {
         motivo: reason,

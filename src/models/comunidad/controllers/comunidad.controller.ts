@@ -26,10 +26,30 @@ import {
 export class ComunidadController {
   constructor(private readonly community: ComunidadUseCases) {}
   @Public()
+  @Get('search')
+  @Paged()
+  @ApiOperation({
+    summary:
+      'Búsqueda global: q, universidad, carrera, anioEstudio y materia; accesible a visitantes',
+  })
+  search(@Query() query: Registro) {
+    return this.community.search(query);
+  }
+  @Public()
   @Get('profiles/:id')
   @ApiOperation({ summary: 'Perfil público sin email ni teléfono privado' })
   profile(@Param('id') id: string) {
     return this.community.profile(id);
+  }
+  @Public()
+  @Get('profiles/:id/reviews')
+  @Paged()
+  @ApiOperation({
+    summary:
+      'Valoraciones públicas de interacciones finalizadas, sin datos de contacto ni conversaciones',
+  })
+  reviews(@Param('id') id: string, @Query() query: Registro) {
+    return this.community.reviews(id, query);
   }
   @Get('me/notifications')
   @Paged()

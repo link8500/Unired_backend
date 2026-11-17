@@ -10,9 +10,22 @@ import {
 import { ensure, missing } from '../../../core/dominio/comun/errores';
 import * as v from '../../../core/dominio/comun/validaciones';
 import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
+import { filtrosAcademicos } from '../../../core/dominio/politicas/filtros-academicos';
 import { MensajeriaUseCases } from '../../mensajeria/aplicacion/mensajeria.use-cases';
 
 export class ComunidadUseCases extends CasosUsoBase {
+  async search(query: Registro) {
+    const filters = {
+      ...v.pagination(query),
+      ...filtrosAcademicos(query),
+      sort: 'recent',
+    };
+    const [courses, listings] = await Promise.all([
+      this.db.read.queries.catalog('courses', filters),
+      this.db.read.queries.catalog('listings', filters),
+    ]);
+    return { courses, listings };
+  }
   constructor(
     db: BaseDatos,
     private readonly messaging: MensajeriaUseCases,
@@ -37,8 +50,19 @@ export class ComunidadUseCases extends CasosUsoBase {
       ciudad: profile?.ciudad,
       avatarArchivoId: profile?.avatarArchivoId,
       bannerArchivoId: profile?.bannerArchivoId,
-      ...(profile?.telefonoPublico ? { telefono: profile.telefono } : {}),
+      universidad: profile?.universidad,
+      carrera: profile?.carrera,
+      ...(await this.db.read.queries.reputation(user.id)),
     };
+  }
+  async reviews(resourceId: unknown, query: Registro) {
+    const user = await this.db.read.store.one('usuarios', {
+      id: v.userId(resourceId),
+      estado: 'activo',
+      eliminadoEn: null,
+    });
+    if (!user) missing('Perfil no disponible.');
+    return this.db.read.queries.reputationReviews(user.id, v.pagination(query));
   }
   notifications(actor: Actor, query: Registro) {
     const where: Filtros = { usuarioId: actor.id };

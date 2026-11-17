@@ -1,6 +1,7 @@
 // Archivo: src/models/aprendizaje/aplicacion/aprendizaje.use-cases.ts
 // Gestiona solicitudes e inscripciones, aceptación del tutor, acceso al contenido, avance, notas y preguntas del alumno.
 
+import { validarInscripcionActiva } from '../../../core/aplicacion/permisos-conversacion';
 import {
   Actor,
   BaseDatos,
@@ -196,6 +197,11 @@ export class AprendizajeUseCases extends CasosUsoBase {
         { estado: 'cancelada' },
       );
       await tx.store.update(
+        'conversaciones',
+        { tutoriaId: enrollment.tutoriaId, consultanteId: enrollment.alumnoId },
+        { estado: 'cerrada' },
+      );
+      await tx.store.update(
         'reservas_sesion',
         { inscripcionId: enrollment.id, estado: 'confirmada' },
         { estado: 'cancelada' },
@@ -271,6 +277,12 @@ export class AprendizajeUseCases extends CasosUsoBase {
           'reservas_sesion',
           { inscripcionId: enrollment.id, estado: 'confirmada' },
           { estado: 'cancelada' },
+        );
+      if (state !== 'activa')
+        await tx.store.update(
+          'conversaciones',
+          { tutoriaId: course.id, consultanteId: enrollment.alumnoId },
+          { estado: 'cerrada' },
         );
       await this.audit(
         tx,
@@ -453,26 +465,13 @@ export class AprendizajeUseCases extends CasosUsoBase {
     });
   }
 
-  /** Una consulta por chat no concede acceso al aula o a los archivos.
-   * Se admite mientras el tutor decide, y se cierra al cancelar o revocar. */
+  /** El chat se habilita únicamente cuando el tutor acepta la inscripción. */
   async conversationAccess(
     tx: Transaccion,
     studentId: number,
     courseId: unknown,
   ) {
-    const course = await tx.queries.publicCourse(v.id(courseId));
-    ensure(course, 'Tutoría no disponible.', 403);
-    const enrollment = await tx.store.one('inscripciones_tutoria', {
-      tutoriaId: course.id,
-      alumnoId: studentId,
-    });
-    ensure(
-      enrollment &&
-        ['solicitada', 'activa', 'completada'].includes(enrollment.estado),
-      'Envía una solicitud de acceso para conversar con el tutor.',
-      403,
-    );
-    return enrollment;
+    return validarInscripcionActiva(tx, studentId, v.id(courseId));
   }
   async notes(
     actor: Actor,

@@ -3,12 +3,12 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { mkdir, open, readdir, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import sharp from 'sharp';
+import sharp, { OutputInfo } from 'sharp';
 import {
   AlmacenamientoBinario,
   ArchivoGuardado,
@@ -50,6 +50,7 @@ export class AlmacenamientoLocalAdapter implements AlmacenamientoBinario {
     this.uploadRoot = resolve(uploadRoot);
   }
   private processing = 0;
+  private readonly waiting: (() => void)[] = [];
   private readonly inFlight = new Set<string>();
   async size(key: string): Promise<number> {
     try {
@@ -116,8 +117,15 @@ export class AlmacenamientoLocalAdapter implements AlmacenamientoBinario {
       'UNSUPPORTED_FORMAT',
     );
     if (type.mime.startsWith('image/')) {
+      ensure(
+        (await stat(source)).size <=
+          Number(process.env.UPLOAD_IMAGE_MAX_BYTES ?? 10485760),
+        'La imagen supera el tamaño permitido.',
+        413,
+        'FILE_TOO_LARGE',
+      );
       try {
-        const image = sharp(source, {
+        const image = sharp(await readFile(source), {
           limitInputPixels: 40000000,
           animated: false,
         });
@@ -320,6 +328,45 @@ export class AlmacenamientoLocalAdapter implements AlmacenamientoBinario {
   async remove(key: string): Promise<void> {
     await unlink(this.absolute(key));
   }
+  /** Las imágenes se reconstruyen desde píxeles; no se publica el archivo recibido.
+   * Esto es saneamiento de imágenes, no un resultado de antivirus. PDF, ZIP y
+   * vídeo conservan el escaneo obligatorio antes de poder compartirse. */
+  async normalizeImage(key: string, folder: string) {
+    await mkdir(this.uploadRoot, { recursive: true });
+    const temporary = resolve(this.uploadRoot, randomUUID() + '.upload');
+    try {
+      let info: OutputInfo;
+      try {
+        info = await sharp(await readFile(this.absolute(key)), {
+          limitInputPixels: 40000000,
+          animated: false,
+          failOn: 'warning',
+        })
+          .rotate()
+          .resize({
+            width: 2400,
+            height: 2400,
+            fit: 'inside',
+            withoutEnlargement: true,
+          })
+          .webp({ quality: 85, effort: 4 })
+          .toFile(temporary);
+      } catch {
+        throw new ErrorDominio(
+          415,
+          'INVALID_IMAGE',
+          'La imagen está dañada o no puede prepararse. Elige otra imagen JPG, PNG o WebP.',
+        );
+      }
+      return {
+        ...(await this.put(temporary, folder, 'webp', 10485760)),
+        width: info.width,
+        height: info.height,
+      };
+    } finally {
+      await unlink(temporary).catch(() => undefined);
+    }
+  }
   async thumbnail(
     key: string,
     folder: string,
@@ -327,7 +374,7 @@ export class AlmacenamientoLocalAdapter implements AlmacenamientoBinario {
     await mkdir(this.uploadRoot, { recursive: true });
     const temporary = resolve(this.uploadRoot, randomUUID() + '.upload');
     try {
-      const info = await sharp(this.absolute(key), {
+      const info = await sharp(await readFile(this.absolute(key)), {
         limitInputPixels: 40000000,
       })
         .rotate()
@@ -349,20 +396,26 @@ export class AlmacenamientoLocalAdapter implements AlmacenamientoBinario {
     }
   }
   async limited<T>(work: () => Promise<T>, key: string): Promise<T> {
+    ensure(!this.inFlight.has(key), 'Este archivo ya está procesándose.', 409);
     ensure(
-      this.processing < 2,
+      this.waiting.length < 16,
       'Hay archivos procesándose. Reintenta en unos segundos.',
       429,
       'PROCESSING_BUSY',
     );
-    ensure(!this.inFlight.has(key), 'Este archivo ya está procesándose.', 409);
-    this.processing++;
     this.inFlight.add(key);
+    // Una cola corta evita rechazar fotos válidas cuando coinciden dos cargas.
+    // El puesto se transfiere directamente al siguiente trabajo, sin carreras.
+    if (this.processing >= Number(process.env.MEDIA_MAX_JOBS ?? 1))
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
+    else this.processing++;
     try {
       return await work();
     } finally {
-      this.processing--;
       this.inFlight.delete(key);
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.processing--;
     }
   }
 }

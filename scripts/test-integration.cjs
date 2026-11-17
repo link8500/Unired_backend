@@ -80,6 +80,9 @@ async function main() {
     API_HOST: '127.0.0.1',
     PORT: String(await port()),
     AV_PROVIDER: process.platform === 'win32' ? 'defender' : 'clamav',
+    ...(process.argv.includes('--uploads')
+      ? { AV_EXECUTABLE: path.join(temporary, 'antivirus-no-instalado') }
+      : {}),
     FFPROBE_PATH:
       process.env.FFPROBE_PATH ??
       (process.platform === 'win32'
@@ -144,17 +147,31 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
     }
+    const productionBoot =
+      process.argv.includes('--commercial') ||
+      process.argv.includes('--interactions');
     console.log('Aplicando migraciones únicamente a la base temporal...');
-    await command(
-      process.execPath,
-      [
-        'node_modules/typeorm/cli.js',
-        'migration:run',
-        '-d',
-        'dist/shared/base_datos/origen-datos.js',
-      ],
-      env,
-    );
+    if (productionBoot) {
+      // Simula una base existente: las dos novedades debe aplicarlas el arranque real.
+      await command(
+        process.execPath,
+        [
+          '-e',
+          "const ds=require('./dist/shared/base_datos/origen-datos').default; ds.setOptions({migrations:ds.options.migrations.filter(m=>Number(m.name.match(/\\d+$/)[0])<1794873600000)}); (async()=>{await ds.initialize();await ds.runMigrations({transaction:'all'});await ds.destroy()})().catch(()=>process.exitCode=1)",
+        ],
+        env,
+      );
+    } else
+      await command(
+        process.execPath,
+        [
+          'node_modules/typeorm/cli.js',
+          'migration:run',
+          '-d',
+          'dist/shared/base_datos/origen-datos.js',
+        ],
+        env,
+      );
     client = new Client({
       host: env.DB_HOST,
       port: Number(env.DB_PORT),
@@ -166,26 +183,39 @@ async function main() {
     const { rows } = await client.query(
       "SELECT COUNT(*)::int AS total FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'",
     );
-    assert.equal(rows[0].total, 44); // 42 originales + outbox + historial de migraciones.
+    assert.equal(rows[0].total, productionBoot ? 44 : 60); // Esquema original, comercio e interacciones de comunidad.
     const adminPassword =
       'Prueba-admin-' + crypto.randomBytes(12).toString('hex');
     console.log('Creando administrador ficticio por consola...');
-    await command(
+    await command(process.execPath, ['dist/shared/cli/crear-admin.js'], {
+      ...env,
+      BOOTSTRAP_ADMIN_EMAIL: 'admin@example.test',
+      BOOTSTRAP_ADMIN_PASSWORD: adminPassword,
+      BOOTSTRAP_ADMIN_NAME: 'Admin prueba',
+    });
+    let legacyCourse;
+    if (productionBoot) {
+      const { rows: legacy } = await client.query(
+        "INSERT INTO tutorias(tutor_id,area_id,titulo,descripcion,precio_base,descuento_porcentaje) SELECT u.id,a.id,'Curso heredado de prueba','Se conserva al actualizar el esquema',777,20 FROM usuarios u CROSS JOIN areas_tutoria a WHERE u.email='admin@example.test' LIMIT 1 RETURNING id",
+      );
+      legacyCourse = legacy[0].id;
+    }
+    api = spawn(
       process.execPath,
-      ['dist/shared/cli/crear-admin.js'],
+      [
+        process.argv.includes('--social')
+          ? 'test/integration/social-server.cjs'
+          : productionBoot
+            ? 'scripts/start-production.cjs'
+            : 'dist/main.js',
+      ],
       {
-        ...env,
-        BOOTSTRAP_ADMIN_EMAIL: 'admin@example.test',
-        BOOTSTRAP_ADMIN_PASSWORD: adminPassword,
-        BOOTSTRAP_ADMIN_NAME: 'Admin prueba',
+        cwd: root,
+        env,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
       },
     );
-    api = spawn(process.execPath, ['dist/main.js'], {
-      cwd: root,
-      env,
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
     api.once('exit', () => {
       apiExited = true;
     });
@@ -213,13 +243,41 @@ async function main() {
       console.error(logs);
       throw Error('La API temporal no pudo arrancar.');
     }
-    const scenarios = process.argv.includes('--admin-ui')
-      ? require('../test/integration/admin-interface.cjs')
-      : process.argv.includes('--profiles')
-        ? require('../test/integration/user-profiles.cjs')
-        : process.argv.includes('--email-verification-disabled')
-          ? require('../test/integration/email-verification-disabled.cjs')
-          : require('../test/integration/api-scenarios.cjs');
+    if (productionBoot) {
+      const { rows: afterBoot } = await client.query(
+        "SELECT COUNT(*)::int AS total FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'",
+      );
+      assert.equal(
+        afterBoot[0].total,
+        60,
+        'El arranque debe completar las migraciones pendientes.',
+      );
+      const { rows: legacy } = await client.query(
+        'SELECT titulo,precio_base,descuento_porcentaje FROM tutorias WHERE id=$1',
+        [legacyCourse],
+      );
+      assert.equal(legacy[0].titulo, 'Curso heredado de prueba');
+      assert.equal(legacy[0].precio_base, '0.00');
+      assert.equal(legacy[0].descuento_porcentaje, '0.00');
+      console.log(
+        'OK: el arranque de producción actualizó una base existente sin perder sus cuentas.',
+      );
+    }
+    const scenarios = process.argv.includes('--social')
+      ? require('../test/integration/social.cjs')
+      : process.argv.includes('--uploads')
+        ? require('../test/integration/uploads.cjs')
+        : process.argv.includes('--commercial')
+          ? require('../test/integration/commercial.cjs')
+          : process.argv.includes('--interactions')
+            ? require('../test/integration/interactions.cjs')
+            : process.argv.includes('--admin-ui')
+              ? require('../test/integration/admin-interface.cjs')
+              : process.argv.includes('--profiles')
+                ? require('../test/integration/user-profiles.cjs')
+                : process.argv.includes('--email-verification-disabled')
+                  ? require('../test/integration/email-verification-disabled.cjs')
+                  : require('../test/integration/api-scenarios.cjs');
     await scenarios({ root, base, env, temporary, client, adminPassword });
     console.log('OK: integración HTTP sobre PostgreSQL aislado.');
   } finally {

@@ -7,6 +7,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
+import sharp from 'sharp';
 import {
   ObjetosS3,
   ConfiguracionS3,
@@ -243,6 +244,35 @@ describe('Almacenamiento S3 privado por HTTP real', () => {
     await expect(remote.size(saved.key)).rejects.toMatchObject({
       code: 'OBJECT_NOT_FOUND',
     });
+  });
+  it('recodifica una imagen en S3, conserva su tamaño/hash y puede generar la miniatura tras retirar la caché', async () => {
+    const local = new AlmacenamientoLocalAdapter(resolve(root, 'images'));
+    await mkdir(local.uploadRoot, { recursive: true });
+    const input = resolve(local.uploadRoot, 'imagen.upload');
+    const png = await sharp({
+      create: { width: 80, height: 50, channels: 3, background: '#ff5566' },
+    })
+      .png()
+      .toBuffer();
+    await writeFile(input, png);
+    const remote = new AlmacenamientoS3Adapter(local, store);
+    const original = await remote.put(input, 'market/1', 'png', 10485760);
+    const image = await remote.normalizeImage(
+      original.key,
+      'imagenes_verificadas/1',
+    );
+    expect(await remote.size(image.key)).toBe(image.bytes);
+    const chunks: Buffer[] = [];
+    for await (const part of await remote.read(image.key, {
+      start: 0,
+      end: image.bytes - 1,
+    }))
+      chunks.push(Buffer.from(part));
+    const bytes = Buffer.concat(chunks);
+    expect((await sharp(bytes).metadata()).format).toBe('webp');
+    expect(createHash('sha256').update(bytes).digest()).toEqual(image.sha256);
+    const thumbnail = await remote.thumbnail(image.key, 'variantes/1/1');
+    expect(await remote.size(thumbnail.key)).toBe(thumbnail.bytes);
   });
 });
 

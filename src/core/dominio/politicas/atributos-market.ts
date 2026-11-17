@@ -59,6 +59,7 @@ export function categoryFields(code: unknown): Field[] {
   }
 }
 export const extraMarketFields = [
+  'tipoPublicacion',
   'atributos',
   'etiquetas',
   'disponibilidad',
@@ -69,6 +70,12 @@ export function extraMarketDetails(
   categoryCode: unknown,
 ): Registro {
   const out: Registro = {};
+  if (body.tipoPublicacion !== undefined)
+    out.tipoPublicacion = v.choice(
+      body.tipoPublicacion,
+      ['venta', 'compra', 'intercambio'],
+      'tipoPublicacion',
+    );
   if (body.atributos !== undefined) {
     const fields = categoryFields(categoryCode);
     const data = v.object(

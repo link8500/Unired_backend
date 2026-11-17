@@ -18,6 +18,7 @@ import {
 import * as v from '../../../core/dominio/comun/validaciones';
 import { readyFile } from '../../../core/dominio/politicas/acceso';
 import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
+import { validarContextoConversacion } from '../../../core/aplicacion/permisos-conversacion';
 import { AprendizajeUseCases } from '../../aprendizaje/aplicacion/aprendizaje.use-cases';
 import { Archivos, NombreEntidad } from '../../../core/dominio/comun/entidades';
 
@@ -53,6 +54,9 @@ export function fileMetadata(file: Archivos) {
     duracionSegundos: file.duracionSegundos,
     estado: file.estado,
     escaneo: file.escaneo,
+    verificacionContenido: file.storageKey.startsWith('imagenes_verificadas/')
+      ? 'recodificacion_imagen'
+      : 'antivirus',
     procesamiento: file.procesamiento,
     creadoEn: file.creadoEn,
   };
@@ -179,7 +183,7 @@ export class MultimediaUseCases extends CasosUsoBase {
     }
   }
   async process(actor: Actor, resourceId: unknown): Promise<Registro> {
-    const file = await this.owned(
+    let file = await this.owned(
       this.db.read.store,
       'archivos',
       resourceId,
@@ -191,7 +195,48 @@ export class MultimediaUseCases extends CasosUsoBase {
     return this.storage.limited(async () => {
       let scanned = false;
       try {
-        await this.storage.scan(file.storageKey);
+        if (file.mimeDetectado.startsWith('image/')) {
+          // Solo una copia reconstruida por el servidor se considera validada.
+          // El estado "limpio" significa contenido verificado; el método se
+          // expone por separado para no atribuirle un antivirus inexistente.
+          if (
+            !file.storageKey.startsWith('imagenes_verificadas/') ||
+            file.escaneo !== 'limpio'
+          ) {
+            const original = file.storageKey;
+            const normalized = await this.storage.normalizeImage(
+              original,
+              'imagenes_verificadas/' + actor.id + '/' + file.proposito,
+            );
+            try {
+              [file] = await this.db.read.store.update(
+                'archivos',
+                { id: file.id },
+                {
+                  storageKey: normalized.key,
+                  extension: 'webp',
+                  nombreOriginal:
+                    file.nombreOriginal.replace(/\.[^.]+$/, '').slice(0, 250) +
+                    '.webp',
+                  mimeDetectado: 'image/webp',
+                  tamanoBytes: String(normalized.bytes),
+                  sha256: normalized.sha256,
+                  anchoPx: normalized.width,
+                  altoPx: normalized.height,
+                  escaneo: 'limpio',
+                },
+              );
+            } catch (error) {
+              await this.storage.remove(normalized.key);
+              throw error;
+            }
+            // La referencia ya apunta a la copia verificada. Un fallo de
+            // limpieza no impide usarla ni convierte la carga en un fracaso.
+            await this.storage.remove(original).catch(() => undefined);
+          }
+        } else {
+          await this.storage.scan(file.storageKey);
+        }
         scanned = true;
         await this.db.read.store.update(
           'archivos',
@@ -413,6 +458,58 @@ export class MultimediaUseCases extends CasosUsoBase {
           allowed = true;
           break;
         }
+      if (!allowed) {
+        const campaigns = await store.find(
+          'campanas_publicitarias',
+          {
+            bannerArchivoId: file.id,
+            estado: 'activa',
+            iniciaEn: { op: 'lte', value: new Date() },
+            terminaEn: { op: 'gt', value: new Date() },
+          },
+          { limit: 100 },
+        );
+        for (const campaign of campaigns) {
+          const company = await store.one('empresas', {
+            id: campaign.empresaId,
+            estado: 'aprobada',
+          });
+          if (
+            company &&
+            (await store.one('usuarios', {
+              id: company.propietarioId,
+              estado: 'activo',
+              eliminadoEn: null,
+            })) &&
+            (await store.one('suscripciones_empresa', {
+              id: campaign.suscripcionId,
+              estado: 'activa',
+              venceEn: { op: 'gt', value: new Date() },
+            }))
+          ) {
+            allowed = true;
+            break;
+          }
+        }
+        if (
+          !allowed &&
+          actor?.roles.includes('administrador') &&
+          (await store.one('campanas_publicitarias', {
+            bannerArchivoId: file.id,
+          }))
+        ) {
+          await this.db.transaction((tx) =>
+            this.audit(
+              tx,
+              actor,
+              'archivo.campana_revisada',
+              'archivo',
+              file.id,
+            ),
+          );
+          allowed = true;
+        }
+      }
     }
     if (
       !allowed &&
@@ -504,8 +601,17 @@ export class MultimediaUseCases extends CasosUsoBase {
             salioEn: null,
           })
         ) {
-          allowed = true;
-          break;
+          const conversation = await store.one('conversaciones', {
+            id: message.conversacionId,
+          });
+          if (conversation)
+            try {
+              await validarContextoConversacion(this.db.read, conversation);
+              allowed = true;
+              break;
+            } catch (error) {
+              if (!(error instanceof ErrorDominio)) throw error;
+            }
         }
       if (
         !allowed &&
@@ -645,6 +751,7 @@ export class MultimediaUseCases extends CasosUsoBase {
         ['recursos_leccion', { archivoId: file.id }],
         ['imagenes_anuncio', { archivoId: file.id }],
         ['mensajes', { archivoId: file.id }],
+        ['campanas_publicitarias', { bannerArchivoId: file.id }],
       ];
       for (const [entity, where] of references)
         ensure(

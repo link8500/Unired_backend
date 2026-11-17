@@ -133,6 +133,19 @@ export class AlmacenamientoS3Adapter implements AlmacenamientoBinario {
     await this.materialize(key);
     await this.local.scan(key);
   }
+  async normalizeImage(key: string, folder: string) {
+    await this.materialize(key);
+    const image = await this.local.normalizeImage(key, folder);
+    try {
+      await this.persist(image, 'webp');
+      return image;
+    } catch (error) {
+      await this.objects.remove(image.key).catch(() => undefined);
+      throw error;
+    } finally {
+      await this.release(image.key);
+    }
+  }
   async probeVideo(key: string) {
     await this.materialize(key);
     return this.local.probeVideo(key);

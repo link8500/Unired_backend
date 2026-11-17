@@ -30,16 +30,17 @@ export class AdministracionQueries {
     }
     if (p.q) {
       values.push(`%${p.q}%`);
-      where += ` AND (buyer.nombre ILIKE $${values.length} OR owner.nombre ILIKE $${values.length} OR COALESCE(a.titulo,t.titulo,'') ILIKE $${values.length})`;
+      where += ` AND (buyer.nombre ILIKE $${values.length} OR owner.nombre ILIKE $${values.length} OR COALESCE(a.titulo,s.tema,t.titulo,'') ILIKE $${values.length})`;
     }
     return this.page(
       `SELECT c.id,c.tipo,c.estado,c.anuncio_id,c.tutoria_id,c.consultante_id,c.propietario_id,c.ultimo_mensaje_en,
        buyer.nombre AS consultante_nombre,owner.nombre AS propietario_nombre,
-       COALESCE(a.titulo,t.titulo) AS recurso_titulo,
+       COALESCE(a.titulo,s.tema,t.titulo) AS recurso_titulo,
        (SELECT COUNT(*)::int FROM mensajes m WHERE m.conversacion_id=c.id) AS mensajes`,
       ` FROM conversaciones c JOIN usuarios buyer ON buyer.id=c.consultante_id
         JOIN usuarios owner ON owner.id=c.propietario_id LEFT JOIN anuncios_market a ON a.id=c.anuncio_id
-        LEFT JOIN tutorias t ON t.id=c.tutoria_id WHERE ${where}`,
+        LEFT JOIN solicitudes_apoyo s ON s.id=c.solicitud_apoyo_id
+        LEFT JOIN tutorias t ON t.id=COALESCE(c.tutoria_id,s.curso_id) WHERE ${where}`,
       values,
       p,
       'c.ultimo_mensaje_en DESC NULLS LAST,c.id DESC',

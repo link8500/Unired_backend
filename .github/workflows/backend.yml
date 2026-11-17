@@ -39,3 +39,5 @@ jobs:
       - run: npm run architecture:check
       - run: npm test
       - run: npm run build
+      - run: node scripts/test-integration.cjs --interactions
+      - run: node scripts/test-integration.cjs --social
