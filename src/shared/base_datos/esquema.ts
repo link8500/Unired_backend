@@ -298,6 +298,8 @@ export const schema: Record<
       id: 'id',
       usuarioId: 'usuario_id',
       refreshTokenHash: 'refresh_token_hash',
+      navegadorId: 'navegador_id',
+      dispositivo: 'dispositivo',
       expiraEn: 'expira_en',
       revocadaEn: 'revocada_en',
       creadoEn: 'creado_en',

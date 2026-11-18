@@ -40,6 +40,8 @@ export interface SesionesUsuario extends RegistroEntidad {
   id: string;
   usuarioId: number;
   refreshTokenHash: Buffer;
+  navegadorId: string | null;
+  dispositivo: string | null;
   expiraEn: Date;
   revocadaEn: Date | null;
   creadoEn: Date;

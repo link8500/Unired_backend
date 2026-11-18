@@ -6,6 +6,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   Param,
   Patch,
@@ -43,9 +44,13 @@ export class IdentidadController {
   @Post('login')
   @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60000 } })
-  @BodyFields('Iniciar sesión con email y contraseña', ['email', 'password'])
-  login(@Body() body: unknown) {
-    return this.identity.login(body);
+  @BodyFields(
+    'Iniciar sesión con email y contraseña',
+    ['email', 'password', 'navegadorId'],
+    ['email', 'password'],
+  )
+  login(@Body() body: unknown, @Headers('user-agent') agente?: string) {
+    return this.identity.login(body, agente);
   }
   @Public()
   @Post('refresh')
@@ -146,6 +151,13 @@ export class CuentaController {
   @ApiOperation({ summary: 'Listar mis sesiones sin exponer refresh tokens' })
   sessions(@CurrentActor() actor: Actor) {
     return this.identity.sessions(actor);
+  }
+  @AllowPending()
+  @Post('sessions/revoke-others')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Cerrar mis otras sesiones y conservar esta' })
+  revokeOthers(@CurrentActor() actor: Actor) {
+    return this.identity.revokeOtherSessions(actor);
   }
   @AllowPending()
   @Delete('sessions/:id')

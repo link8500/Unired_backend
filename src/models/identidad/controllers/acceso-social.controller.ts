@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   HttpCode,
   Param,
   Post,
@@ -78,10 +79,11 @@ export class AccesoSocialController {
   @Throttle({ default: { limit: 15, ttl: 60000 } })
   @BodyFields(
     'Canjear código con el verificador original; confirmar contraseña UniRed si la cuenta ya existe',
-    ['codigo', 'verificador', 'passwordActual'],
+    ['codigo', 'verificador', 'passwordActual', 'navegadorId'],
+    ['codigo', 'verificador'],
   )
-  exchange(@Body() body: unknown) {
-    return this.social.exchange(body);
+  exchange(@Body() body: unknown, @Headers('user-agent') agente?: string) {
+    return this.social.exchange(body, agente);
   }
   @ApiBearerAuth()
   @Get('me/social')

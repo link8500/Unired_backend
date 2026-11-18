@@ -15,6 +15,7 @@ import { ensure, missing } from '../../../core/dominio/comun/errores';
 import { Usuarios, TokensCuenta } from '../../../core/dominio/comun/entidades';
 import * as v from '../../../core/dominio/comun/validaciones';
 import { IdentidadSocial } from '../../../core/dominio/comun/acceso-social';
+import { describirDispositivo } from '../../../core/dominio/politicas/dispositivo-sesion';
 import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
 import { preserveAdministrator } from '../../../core/aplicacion/seguridad-administrativa';
 import {
@@ -176,8 +177,10 @@ export class IdentidadUseCases extends CasosUsoBase {
         : 'Cuenta creada. Puedes iniciar sesión; la verificación de correo está desactivada en desarrollo.',
     };
   }
-  async login(input: unknown): Promise<Registro> {
-    const body = v.object(input, ['email', 'password']);
+  async login(input: unknown, agente?: string): Promise<Registro> {
+    const body = v.object(input, ['email', 'password', 'navegadorId']);
+    const navegadorId =
+      body.navegadorId === undefined ? undefined : v.uuid(body.navegadorId);
     const email = v.email(body.email);
     const password = v.secret(body.password, 'password');
     const user = await this.db.read.store.one('usuarios', {
@@ -230,16 +233,47 @@ export class IdentidadUseCases extends CasosUsoBase {
           locked.id,
         );
       }
-      return this.newSession(tx, locked);
+      return this.newSession(tx, locked, { navegadorId, agente });
     });
   }
-  private async newSession(tx: Transaccion, user: Usuarios): Promise<Registro> {
+  private async newSession(
+    tx: Transaccion,
+    user: Usuarios,
+    options: {
+      navegadorId?: string;
+      sesionAnterior?: string;
+      agente?: string;
+    } = {},
+  ): Promise<Registro> {
+    // Tanto el acceso local como el social mantienen bloqueada la fila de la cuenta.
+    // Autenticarse de nuevo rota también el ID de sesión, invalidando el JWT anterior.
+    const revocadaEn = new Date();
+    if (options.navegadorId) {
+      await tx.store.update(
+        'sesiones_usuario',
+        {
+          usuarioId: user.id,
+          navegadorId: options.navegadorId,
+          revocadaEn: null,
+        },
+        { revocadaEn },
+      );
+    }
+    if (options.sesionAnterior) {
+      await tx.store.update(
+        'sesiones_usuario',
+        { id: options.sesionAnterior, usuarioId: user.id, revocadaEn: null },
+        { revocadaEn },
+      );
+    }
     const sid = this.tokens.uuid();
     const refreshToken = sid + '.' + this.tokens.random();
     await tx.store.insert('sesiones_usuario', {
       id: sid,
       usuarioId: user.id,
       refreshTokenHash: this.tokens.digest(refreshToken),
+      navegadorId: options.navegadorId ?? null,
+      dispositivo: describirDispositivo(options.agente),
       expiraEn: new Date(Date.now() + 30 * 86400000),
     });
     return {
@@ -257,9 +291,15 @@ export class IdentidadUseCases extends CasosUsoBase {
   async externalSession(
     tx: Transaccion,
     profile: IdentidadSocial,
-    ownerId?: number,
-    password?: unknown,
+    options: {
+      ownerId?: number;
+      password?: unknown;
+      navegadorId?: string;
+      sesionAnterior?: string;
+      agente?: string;
+    } = {},
   ): Promise<Registro> {
+    const { ownerId, password, navegadorId, sesionAnterior, agente } = options;
     const link = await tx.store.one('identidades_externas', {
       proveedor: profile.proveedor,
       sujetoProveedor: profile.sujeto,
@@ -382,7 +422,11 @@ export class IdentidadUseCases extends CasosUsoBase {
       { proveedor: profile.proveedor },
     );
     return {
-      ...(await this.newSession(tx, user)),
+      ...(await this.newSession(tx, user, {
+        navegadorId,
+        sesionAnterior,
+        agente,
+      })),
       nuevo,
       vinculado: ownerId !== undefined,
     };
@@ -723,15 +767,23 @@ export class IdentidadUseCases extends CasosUsoBase {
     });
   }
   async sessions(actor: Actor): Promise<Registro[]> {
-    return this.db.read.store.find(
+    const sessions = await this.db.read.store.find(
       'sesiones_usuario',
-      { usuarioId: actor.id, revocadaEn: null },
       {
-        fields: ['id', 'creadoEn', 'expiraEn'],
+        usuarioId: actor.id,
+        revocadaEn: null,
+        expiraEn: { op: 'gt', value: new Date() },
+      },
+      {
+        fields: ['id', 'creadoEn', 'expiraEn', 'dispositivo'],
         order: { creadoEn: 'DESC' },
         limit: 100,
       },
     );
+    return sessions.map((session) => ({
+      ...session,
+      actual: session.id === actor.sessionId,
+    }));
   }
   async revokeSession(actor: Actor, sid: unknown): Promise<Registro> {
     const session = await this.db.read.store.one('sesiones_usuario', {
@@ -745,6 +797,19 @@ export class IdentidadUseCases extends CasosUsoBase {
       { revocadaEn: new Date() },
     );
     return { mensaje: 'Sesión revocada.' };
+  }
+  async revokeOtherSessions(actor: Actor): Promise<Registro> {
+    const closed = await this.db.read.store.update(
+      'sesiones_usuario',
+      {
+        usuarioId: actor.id,
+        id: { op: 'ne', value: actor.sessionId },
+        revocadaEn: null,
+        expiraEn: { op: 'gt', value: new Date() },
+      },
+      { revocadaEn: new Date() },
+    );
+    return { cerradas: closed.length };
   }
   async editProfile(actor: Actor, input: unknown): Promise<Registro> {
     await this.db.transaction(async (tx) => {

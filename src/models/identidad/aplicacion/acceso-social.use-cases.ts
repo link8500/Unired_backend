@@ -194,8 +194,15 @@ export class AccesoSocialUseCases extends CasosUsoBase {
       return this.returnUrl(flow.origenFrontend, { error: code });
     }
   }
-  async exchange(input: unknown): Promise<Registro> {
-    const body = v.object(input, ['codigo', 'verificador', 'passwordActual']);
+  async exchange(input: unknown, agente?: string): Promise<Registro> {
+    const body = v.object(input, [
+      'codigo',
+      'verificador',
+      'passwordActual',
+      'navegadorId',
+    ]);
+    const navegadorId =
+      body.navegadorId === undefined ? undefined : v.uuid(body.navegadorId);
     const code = v.text(body.codigo, 'codigo', 200, 20),
       verifier = v.text(body.verificador, 'verificador', 128, 43);
     ensure(
@@ -251,12 +258,13 @@ export class AccesoSocialUseCases extends CasosUsoBase {
         email: flow.correoProveedor,
         emailVerificado: flow.correoVerificado,
       };
-      const value = await this.identidad.externalSession(
-        tx,
-        profile,
-        flow.usuarioVinculacionId ?? undefined,
-        body.passwordActual,
-      );
+      const value = await this.identidad.externalSession(tx, profile, {
+        ownerId: flow.usuarioVinculacionId ?? undefined,
+        password: body.passwordActual,
+        navegadorId,
+        sesionAnterior: flow.sesionVinculacionId ?? undefined,
+        agente,
+      });
       if (value.passwordIncorrecta) {
         await tx.store.update(
           'flujos_acceso_social',
