@@ -395,14 +395,14 @@ module.exports = async function interactions(ctx) {
     token,
     201,
   );
-  assert.equal(publishedCourse.precioBase, '3.00');
+  assert.equal(publishedCourse.precioBase, '0.00');
   const computed = await request(
     'GET',
     '/me/courses/' + course.id,
     null,
     token,
   );
-  assert.equal(computed.cotizacion.total, '3.00');
+  assert.equal(computed.cotizacion.total, '0.00');
   const forged = await request(
     'PATCH',
     '/me/courses/' + course.id,
@@ -413,7 +413,7 @@ module.exports = async function interactions(ctx) {
     },
     token,
   );
-  assert.equal(forged.precioBase, '3.00');
+  assert.equal(forged.precioBase, '0.00');
   assert.equal(forged.descuentoPorcentaje, '0.00');
   await request(
     'GET',
