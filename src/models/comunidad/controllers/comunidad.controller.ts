@@ -4,6 +4,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -68,6 +69,11 @@ export class ComunidadController {
   @ApiOperation({ summary: 'Marcar una notificación propia como leída' })
   read(@CurrentActor() actor: Actor, @Param('id') id: string) {
     return this.community.readNotification(actor, id);
+  }
+  @Delete('me/notifications/:id')
+  @ApiOperation({ summary: 'Eliminar una notificación propia' })
+  deleteNotice(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    return this.community.deleteNotification(actor, id);
   }
   @Post('reports')
   @BodyFields(

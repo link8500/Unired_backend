@@ -169,6 +169,7 @@ export interface HabilitacionesTutor extends RegistroEntidad {
 }
 
 export interface Tutorias extends RegistroEntidad {
+  gratuita: boolean;
   resumen: string | null;
   idioma: string;
   objetivos: string[];
@@ -230,6 +231,8 @@ export interface RecursosLeccion extends RegistroEntidad {
 }
 
 export interface InscripcionesTutoria extends RegistroEntidad {
+  importeDemo: string;
+  aprobadaParaPagoEn: Date | null;
   id: string;
   tutoriaId: string;
   alumnoId: number;

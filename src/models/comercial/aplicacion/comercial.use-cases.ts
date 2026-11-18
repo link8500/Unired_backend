@@ -438,9 +438,7 @@ export class ComercialUseCases extends CasosUsoBase {
       'modalidad',
     );
     const minutes = v.integer(body.duracionMinutos, 'duracionMinutos', 15, 480);
-    return cotizarMinutos(this.db.read, area.id, modality, minutes, {
-      aplicarModoGratuito: true,
-    });
+    return cotizarMinutos(this.db.read, area.id, modality, minutes);
   }
   /** Nunca recibe tarjeta, fecha, CVV ni marca bancaria. Solo la intención de demo. */
   rates() {
@@ -504,17 +502,19 @@ export class ComercialUseCases extends CasosUsoBase {
         'destacar_anuncio',
         'destacar_curso',
         'tutoria_solicitud',
+        'tutoria_inscripcion',
       ],
       'concepto',
     );
     return this.db.transaction(async (tx) => {
       await tx.store.one('usuarios', { id: actor.id }, { lock: true });
+      const isTutoring =
+        concept === 'tutoria_solicitud' || concept === 'tutoria_inscripcion';
       const response = (pago: PagoDemo) => ({
         pago,
-        mensaje:
-          concept === 'tutoria_solicitud'
-            ? 'Pago de demostración confirmado.'
-            : 'Compra simulada realizada. No se efectuó ningún cobro.',
+        mensaje: isTutoring
+          ? 'Pago de demostración confirmado.'
+          : 'Compra simulada realizada. No se efectuó ningún cobro.',
         simulado: true,
       });
       const existing = await tx.store.one('pagos_demo', {
@@ -528,7 +528,7 @@ export class ComercialUseCases extends CasosUsoBase {
           'La operación ya se usó para otra compra.',
           409,
         );
-        if (concept === 'recarga_tutor' || concept === 'tutoria_solicitud')
+        if (concept === 'recarga_tutor' || isTutoring)
           ensure(
             existing.importe === v.money(body.importe, 'importe'),
             'El importe ya fue confirmado con otro valor.',
@@ -557,7 +557,39 @@ export class ComercialUseCases extends CasosUsoBase {
       let company: Empresa | undefined;
       let planId: string | undefined;
       let tutorId: number | null = null;
-      if (concept === 'tutoria_solicitud') {
+      let paidCourseId: string | null = null;
+      if (concept === 'tutoria_inscripcion') {
+        const enrollment = await this.owned(
+          tx.store,
+          'inscripciones_tutoria',
+          resourceId,
+          actor,
+          'alumnoId',
+        );
+        const previous = await tx.store.one('pagos_demo', {
+          concepto: concept,
+          recursoId: enrollment.id,
+          usuarioId: actor.id,
+        });
+        amount = previous?.importe ?? enrollment.importeDemo;
+        ensure(
+          v.money(body.importe, 'importe') === amount,
+          'El importe no coincide con la inscripción.',
+          409,
+        );
+        if (previous) return response(previous);
+        ensure(
+          enrollment.estado === 'solicitada' &&
+            enrollment.aprobadaParaPagoEn &&
+            centavos(amount) > 0n,
+          'El pago demo está disponible después de que el tutor apruebe tu inscripción.',
+          409,
+        );
+        const course = await tx.queries.publicCourse(enrollment.tutoriaId);
+        ensure(course, 'La tutoría no está disponible en este momento.', 409);
+        tutorId = course.tutorId;
+        paidCourseId = enrollment.tutoriaId;
+      } else if (concept === 'tutoria_solicitud') {
         const request = await this.owned(
           tx.store,
           'solicitudes_apoyo',
@@ -656,6 +688,25 @@ export class ComercialUseCases extends CasosUsoBase {
         recursoId: resourceId,
         importe: amount,
       });
+      if (paidCourseId !== null) {
+        await tx.store.update(
+          'inscripciones_tutoria',
+          { id: resourceId },
+          {
+            estado: 'activa',
+            activadaEn: new Date(),
+            completadaEn: null,
+            aprobadaParaPagoEn: null,
+          },
+        );
+        await this.audit(
+          tx,
+          actor,
+          'inscripcion.activa',
+          'inscripcion',
+          resourceId!,
+        );
+      }
       if (company && planId)
         await tx.store.insert('suscripciones_empresa', {
           empresaId: company.id,
@@ -705,9 +756,11 @@ export class ComercialUseCases extends CasosUsoBase {
         await this.notify(
           tx,
           tutorId,
-          'solicitud_tutoria',
+          paidCourseId === null ? 'solicitud_tutoria' : 'inscripcion',
           'El estudiante confirmó el pago de demostración',
-          { solicitudId: resourceId, vista: 'impartidas' },
+          paidCourseId === null
+            ? { solicitudId: resourceId, vista: 'impartidas' }
+            : { cursoId: paidCourseId, inscripcionId: resourceId },
         );
       await this.audit(tx, actor, 'pago.simulado', 'pago_demo', payment.id, {
         concepto: concept,

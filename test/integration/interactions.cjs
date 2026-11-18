@@ -213,6 +213,12 @@ module.exports = async function interactions(ctx) {
   );
   assert.equal(publicReviews.items[0].ofertaId, undefined);
   assert.equal(publicReviews.items[0].email, undefined);
+  await request(
+    'PATCH',
+    '/admin/commerce/rates/' + areas[0].id,
+    { precioMinutoOnline: '0.00' },
+    admin.accessToken,
+  );
   const body = {
     areaId: areas[0].id,
     materia: 'Programación',
@@ -237,11 +243,23 @@ module.exports = async function interactions(ctx) {
     student,
     201,
   );
+  const notice = (
+    await request('GET', '/me/notifications', null, token)
+  ).items.find(
+    (row) =>
+      row.tipo === 'solicitud_tutoria' && row.datos.solicitudId === ignored.id,
+  );
+  assert.ok(notice);
+  await request('DELETE', '/me/notifications/' + notice.id, null, student);
   assert.ok(
     (await request('GET', '/me/notifications', null, token)).items.some(
-      (row) =>
-        row.tipo === 'solicitud_tutoria' &&
-        row.datos.solicitudId === ignored.id,
+      (row) => row.id === notice.id,
+    ),
+  );
+  await request('DELETE', '/me/notifications/' + notice.id, null, token);
+  assert.ok(
+    !(await request('GET', '/me/notifications', null, token)).items.some(
+      (row) => row.id === notice.id,
     ),
   );
   assert.ok(
@@ -508,12 +526,6 @@ module.exports = async function interactions(ctx) {
     admin.accessToken,
   );
   assert.equal(rate.precioMinutoOnline, '5.00');
-  await request(
-    'PATCH',
-    '/admin/commerce/config',
-    { tutoriasGratuitas: false },
-    admin.accessToken,
-  );
   const quote = await request(
     'POST',
     '/tutorial-quote',
@@ -523,6 +535,84 @@ module.exports = async function interactions(ctx) {
   );
   assert.equal(quote.total, '300.00');
   assert.equal(quote.comision, '45.00');
+  const coursePath = '/me/courses/' + course.id;
+  const currentCourse = await request('GET', coursePath, null, token);
+  const freeCourse = await request(
+    'PATCH',
+    coursePath,
+    {
+      versionLock: currentCourse.versionLock,
+      gratuita: true,
+    },
+    token,
+  );
+  assert.equal(freeCourse.precioBase, '0.00');
+  const paidCourse = await request(
+    'PATCH',
+    coursePath,
+    {
+      versionLock: freeCourse.versionLock,
+      gratuita: false,
+    },
+    token,
+  );
+  assert.ok(Number(paidCourse.precioBase) > 0);
+  const courseEnrollment = await request(
+    'POST',
+    '/courses/' + course.id + '/enrollments',
+    null,
+    admin.accessToken,
+    201,
+  );
+  const coursePayment = {
+    concepto: 'tutoria_inscripcion',
+    recursoId: courseEnrollment.id,
+    importe: paidCourse.precioBase,
+    clienteId: randomUUID(),
+  };
+  await request(
+    'POST',
+    '/demo/checkout',
+    coursePayment,
+    admin.accessToken,
+    409,
+  );
+  const beforePayment = await request(
+    'PATCH',
+    coursePath + '/enrollments/' + courseEnrollment.id,
+    {
+      estado: 'activa',
+      motivo: 'Solicitud de demostración aprobada.',
+    },
+    token,
+  );
+  assert.equal(beforePayment.estado, 'solicitada');
+  assert.ok(beforePayment.aprobadaParaPagoEn);
+  await request('POST', '/demo/checkout', coursePayment, student, 403);
+  const courseReceipt = await request(
+    'POST',
+    '/demo/checkout',
+    coursePayment,
+    admin.accessToken,
+    201,
+  );
+  assert.equal(courseReceipt.pago.importe, paidCourse.precioBase);
+  const duplicate = await request(
+    'POST',
+    '/demo/checkout',
+    {
+      ...coursePayment,
+      clienteId: randomUUID(),
+    },
+    admin.accessToken,
+    201,
+  );
+  assert.equal(duplicate.pago.id, courseReceipt.pago.id);
+  const enrollmentWithReceipt = (
+    await request('GET', '/me/enrollments', null, admin.accessToken)
+  ).items.find((row) => row.id === courseEnrollment.id);
+  assert.equal(enrollmentWithReceipt.estado, 'activa');
+  assert.equal(enrollmentWithReceipt.pagoDemoId, courseReceipt.pago.id);
   const paidHelp = await request(
     'POST',
     '/me/tutoring-requests',

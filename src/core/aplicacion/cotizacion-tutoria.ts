@@ -13,7 +13,7 @@ export async function cotizarMinutos(
   areaId: number,
   modalidad: 'online' | 'presencial',
   minutos: number,
-  { aplicarModoGratuito = false } = {},
+  { gratuita = false } = {},
 ) {
   ensure(
     Number.isSafeInteger(minutos) && minutos >= 0 && minutos <= 1000000,
@@ -21,7 +21,6 @@ export async function cotizarMinutos(
   );
   const config = await tx.store.one('configuracion_comercial', { id: 1 });
   ensure(config, 'Las tarifas todavía no están configuradas.', 503);
-  const gratuita = aplicarModoGratuito && config.tutoriasGratuitas;
   const tarifa = gratuita
     ? null
     : await tx.store.one('tarifas_tutoria', { areaId });
@@ -44,20 +43,21 @@ export async function cotizarMinutos(
     total,
     comision: comision(total, config.comisionPorcentaje),
     moneda: 'NIO',
-    modoGratuito: gratuita,
     simulado: true,
   };
 }
 
 export async function cotizarCurso(
   tx: Transaccion,
-  curso: { id: string; areaId: number },
+  curso: { id: string; areaId: number; gratuita?: boolean },
 ) {
   // El navegador no puede imponer la duración: procede del material publicado
   // y de las sesiones programadas en la base de datos.
   const minutos = (await tx.queries.courseDuration(curso.id, true)) ?? 0;
   return {
-    ...(await cotizarMinutos(tx, curso.areaId, 'online', minutos)),
+    ...(await cotizarMinutos(tx, curso.areaId, 'online', minutos, {
+      gratuita: curso.gratuita,
+    })),
     pendienteContenido: minutos === 0,
   };
 }

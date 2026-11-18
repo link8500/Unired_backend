@@ -30,6 +30,7 @@ const courseFields = [
   'descripcion',
   'nivel',
   'modalidad',
+  'gratuita',
   'precioBase',
   'descuentoPorcentaje',
   'moneda',

@@ -240,9 +240,7 @@ module.exports = async function commerce(ctx) {
     token,
     201,
   );
-  assert.equal(quote.total, '0.00');
-  assert.equal(quote.comision, '0.00');
-  assert.equal(quote.modoGratuito, true);
+  assert.equal(quote.total, '180.00');
   await request(
     'PATCH',
     '/admin/commerce/config',
@@ -260,7 +258,7 @@ module.exports = async function commerce(ctx) {
   await request(
     'PATCH',
     '/admin/commerce/config',
-    { comisionPorcentaje: '15.00', tutoriasGratuitas: false },
+    { comisionPorcentaje: '15.00' },
     admin.accessToken,
   );
   assert.equal(
@@ -275,13 +273,6 @@ module.exports = async function commerce(ctx) {
     ).comision,
     '27.00',
   );
-  await request(
-    'PATCH',
-    '/admin/commerce/config',
-    { tutoriasGratuitas: true },
-    admin.accessToken,
-  );
-
   await request(
     'POST',
     '/demo/checkout',

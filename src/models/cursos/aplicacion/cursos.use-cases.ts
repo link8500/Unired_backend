@@ -256,6 +256,7 @@ export class CursosUseCases extends CasosUsoBase {
       'descripcion',
       'nivel',
       'modalidad',
+      'gratuita',
       'precioBase',
       'descuentoPorcentaje',
       'moneda',
@@ -265,6 +266,10 @@ export class CursosUseCases extends CasosUsoBase {
     const data = {
       areaId,
       tutorId: actor.id,
+      gratuita:
+        body.gratuita === undefined
+          ? false
+          : v.boolean(body.gratuita, 'gratuita'),
       titulo: v.text(body.titulo, 'titulo', 220),
       descripcion: v.text(body.descripcion, 'descripcion', 20000),
       nivel: v.choice(
@@ -316,6 +321,7 @@ export class CursosUseCases extends CasosUsoBase {
       'descripcion',
       'nivel',
       'modalidad',
+      'gratuita',
       'precioBase',
       'descuentoPorcentaje',
       'moneda',
@@ -333,6 +339,7 @@ export class CursosUseCases extends CasosUsoBase {
       const fields = v.pickDefined(
         editable,
         {
+          gratuita: (x) => v.boolean(x, 'gratuita'),
           titulo: (x) => v.text(x, 'titulo', 220),
           descripcion: (x) => v.text(x, 'descripcion', 20000),
           nivel: (x) =>
@@ -356,7 +363,10 @@ export class CursosUseCases extends CasosUsoBase {
         'No hay campos editables.',
       );
       const pricing = price({ ...course, ...fields }, false);
-      const quote = await cotizarCurso(tx, course);
+      const quote = await cotizarCurso(tx, {
+        ...course,
+        gratuita: (fields.gratuita as boolean | undefined) ?? course.gratuita,
+      });
       if (fields.portadaArchivoId)
         await this.file(
           tx.store,

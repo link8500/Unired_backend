@@ -48,6 +48,22 @@ export class AcreditacionesUseCases extends CasosUsoBase {
         activo: true,
       });
       if (!area) missing('Área no disponible.');
+      if (Object.keys(body).length === 1) {
+        await tx.store.one('usuarios', { id: actor.id }, { lock: true });
+        const current = await tx.store.one(
+          'solicitudes_tutor',
+          {
+            tutorId: actor.id,
+            areaId,
+            estado: {
+              op: 'in',
+              value: ['borrador', 'enviada', 'en_revision', 'correcciones'],
+            },
+          },
+          { order: { id: 'DESC' } },
+        );
+        if (current) return current;
+      }
       const request = await tx.store.insert('solicitudes_tutor', {
         ...applicationDetails(body),
         tutorId: actor.id,

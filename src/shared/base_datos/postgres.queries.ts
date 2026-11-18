@@ -20,10 +20,6 @@ const courseAccess =
   "t.estado = 'publicada' AND t.eliminada_en IS NULL AND u.estado = 'activo' AND u.eliminado_en IS NULL AND a.activo AND h.estado = 'vigente' AND h.valida_desde <= CURRENT_TIMESTAMP AND (h.valida_hasta IS NULL OR h.valida_hasta > CURRENT_TIMESTAMP)";
 const courseJoin =
   ' FROM tutorias t JOIN usuarios u ON u.id=t.tutor_id JOIN areas_tutoria a ON a.id=t.area_id JOIN habilitaciones_tutor h ON h.id=t.habilitacion_id';
-const freeTutoring =
-  '(SELECT tutorias_gratuitas FROM configuracion_comercial WHERE id=1)';
-const visibleCoursePrice = `CASE WHEN ${freeTutoring} THEN 0.00::numeric ELSE t.precio_base END`;
-const visibleCourseDiscount = `CASE WHEN ${freeTutoring} THEN 0.00::numeric ELSE t.descuento_porcentaje END`;
 // La lectura usa el material actual. Los videos solo aportan su duración
 // verificada y el texto se estima a 240 palabras por minuto.
 const courseDuration = (id: string, publishedOnly: boolean) => `
@@ -48,8 +44,8 @@ const courseFields =
    (SELECT COUNT(*)::int FROM lecciones_tutoria l WHERE l.tutoria_id=t.id AND l.publicada AND l.archivada_en IS NULL) AS lecciones_total,
    (SELECT COUNT(*)::int FROM recursos_leccion r JOIN lecciones_tutoria l ON l.id=r.leccion_id WHERE r.tutoria_id=t.id AND l.publicada AND l.archivada_en IS NULL) AS recursos_total,` +
   `t.resumen,t.idioma,t.objetivos,t.requisitos,t.dirigido_a,${courseDuration('t.id', true)} AS duracion_estimada_minutos,` +
-  `t.id,t.tutor_id,t.area_id,t.titulo,t.descripcion,t.nivel,t.modalidad,${visibleCoursePrice} AS precio_base,
-   ${visibleCourseDiscount} AS descuento_porcentaje,t.moneda,t.portada_archivo_id,t.publicada_en,u.nombre AS tutor_nombre,a.nombre AS area_nombre,
+  `t.id,t.tutor_id,t.area_id,t.titulo,t.descripcion,t.nivel,t.modalidad,t.gratuita,t.precio_base,
+   t.descuento_porcentaje,t.moneda,t.portada_archivo_id,t.publicada_en,u.nombre AS tutor_nombre,a.nombre AS area_nombre,
    (SELECT COUNT(*)::int FROM inscripciones_tutoria i WHERE i.tutoria_id=t.id AND i.estado IN ('activa','completada')) AS alumnos,
    (SELECT ROUND(AVG(r.puntuacion),2)::text FROM resenas_tutoria r WHERE r.tutoria_id=t.id AND r.estado='visible') AS puntuacion`;
 const listingJoin =
@@ -215,12 +211,14 @@ export class PostgresQueries implements Consultas {
       `SELECT i.*, t.titulo AS curso_titulo, t.modalidad, u.nombre AS tutor_nombre,
               t.portada_archivo_id, COALESCE((${courseAccess}),false) AS curso_disponible,
               progreso.total_lecciones, progreso.completadas,
+              p.id AS pago_demo_id,p.importe AS pago_demo_importe,p.creado_en AS pago_demo_fecha,
               (SELECT r.id FROM resenas_interaccion r WHERE r.inscripcion_id=i.id AND r.autor_id=$1) AS resena_propia_id
          FROM inscripciones_tutoria i
          JOIN tutorias t ON t.id=i.tutoria_id
          JOIN usuarios u ON u.id=t.tutor_id
          JOIN areas_tutoria a ON a.id=t.area_id
          LEFT JOIN habilitaciones_tutor h ON h.id=t.habilitacion_id
+         LEFT JOIN pagos_demo p ON p.concepto='tutoria_inscripcion' AND p.recurso_id=i.id AND p.usuario_id=i.alumno_id
          CROSS JOIN LATERAL (
            SELECT COUNT(*)::int AS total_lecciones,
                   COUNT(pr.leccion_id) FILTER (WHERE pr.completada_en IS NOT NULL)::int AS completadas
@@ -431,11 +429,11 @@ export class PostgresQueries implements Consultas {
       `SELECT c.id,c.tipo,c.anuncio_id,COALESCE(c.tutoria_id,s.curso_id) AS tutoria_id,c.solicitud_apoyo_id,c.estado,c.ultimo_mensaje_en,u.id AS interlocutor_id,u.nombre AS interlocutor_nombre,
       up.avatar_archivo_id AS interlocutor_avatar_id,COALESCE(a.titulo,s.tema,t.titulo) AS recurso_titulo,
       LEFT(COALESCE(a.descripcion,s.descripcion,NULLIF(t.resumen,''),t.descripcion,''),1000) AS recurso_descripcion,
-      COALESCE(a.precio_base,s.precio,${visibleCoursePrice}) AS recurso_precio_base,
-      COALESCE(a.descuento_porcentaje,${visibleCourseDiscount}) AS recurso_descuento_porcentaje,
+      COALESCE(a.precio_base,s.precio,t.precio_base) AS recurso_precio_base,
+      COALESCE(a.descuento_porcentaje,t.descuento_porcentaje) AS recurso_descuento_porcentaje,
       COALESCE(a.moneda,s.moneda,t.moneda) AS recurso_moneda,
       COALESCE(a.estado::text,s.estado,t.estado::text) AS recurso_estado,
-      CASE WHEN c.tipo='market' THEN a.tipo_precio::text WHEN COALESCE(s.precio,${visibleCoursePrice})=0 THEN 'gratis' ELSE 'fijo' END AS recurso_tipo_precio,
+      CASE WHEN c.tipo='market' THEN a.tipo_precio::text WHEN COALESCE(s.precio,t.precio_base)=0 THEN 'gratis' ELSE 'fijo' END AS recurso_tipo_precio,
       COALESCE((SELECT i.archivo_id FROM imagenes_anuncio i JOIN archivos f ON f.id=i.archivo_id
         WHERE i.anuncio_id=a.id AND f.estado='listo' AND f.escaneo='limpio' AND f.eliminado_en IS NULL ORDER BY i.orden LIMIT 1),t.portada_archivo_id) AS recurso_imagen_id,
       CASE WHEN last.eliminado_en IS NOT NULL THEN 'Mensaje eliminado' WHEN last.archivo_id IS NOT NULL THEN COALESCE(last.contenido,'Archivo adjunto') ELSE last.contenido END AS ultimo_mensaje,
@@ -457,7 +455,7 @@ export class PostgresQueries implements Consultas {
       join += ' AND i.estado=$2';
     }
     return this.page(
-      'SELECT i.id,i.alumno_id,i.estado,i.creado_en,u.nombre,(SELECT r.id FROM resenas_interaccion r JOIN tutorias t ON t.id=i.tutoria_id WHERE r.inscripcion_id=i.id AND r.autor_id=t.tutor_id) AS resena_propia_id,(SELECT COUNT(*)::int FROM progreso_lecciones pl JOIN lecciones_tutoria l ON l.id=pl.leccion_id WHERE pl.inscripcion_id=i.id AND pl.completada_en IS NOT NULL AND l.publicada AND l.archivada_en IS NULL) AS completadas' +
+      'SELECT i.id,i.alumno_id,i.estado,i.creado_en,i.aprobada_para_pago_en,u.nombre,(SELECT r.id FROM resenas_interaccion r JOIN tutorias t ON t.id=i.tutoria_id WHERE r.inscripcion_id=i.id AND r.autor_id=t.tutor_id) AS resena_propia_id,(SELECT COUNT(*)::int FROM progreso_lecciones pl JOIN lecciones_tutoria l ON l.id=pl.leccion_id WHERE pl.inscripcion_id=i.id AND pl.completada_en IS NOT NULL AND l.publicada AND l.archivada_en IS NULL) AS completadas' +
         join +
         ' ORDER BY i.id DESC',
       'SELECT COUNT(*)::int AS total' + join,

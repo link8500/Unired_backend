@@ -15,6 +15,7 @@ import { PreciosCursos1794873600002 } from './migraciones/1794873600002-precios-
 import { AccesoSocial1794931200000 } from './migraciones/1794931200000-acceso-social';
 import { TutoriasGratuitas1795017600000 } from './migraciones/1795017600000-tutorias-gratuitas';
 import { PagoDemoTutoria1795017600001 } from './migraciones/1795017600001-pago-demo-tutoria';
+import { PrecioPorTutoria1795017600002 } from './migraciones/1795017600002-precio-por-tutoria';
 
 export function databaseOptions(): DataSourceOptions {
   return {
@@ -32,6 +33,7 @@ export function databaseOptions(): DataSourceOptions {
       AccesoSocial1794931200000,
       TutoriasGratuitas1795017600000,
       PagoDemoTutoria1795017600001,
+      PrecioPorTutoria1795017600002,
     ],
     migrationsTableName: 'typeorm_migrations',
     synchronize: false,

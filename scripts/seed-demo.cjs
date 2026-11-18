@@ -18,6 +18,7 @@ const {
 const {
   AlmacenamientoLocalAdapter,
 } = require('../dist/shared/almacenamiento/almacenamiento-local.adapter');
+const { ObjetosS3 } = require('../dist/shared/almacenamiento/objetos-s3');
 const fixture = require('./demo/fixtures.cjs');
 const supplies = require('./demo/market-escolar.cjs');
 
@@ -109,8 +110,8 @@ async function storeFile(store, ownerId, purpose, name, title) {
   const file = await store.insert('archivos', {
     propietarioId: ownerId,
     proposito: purpose,
-    storageBucket: 'private-media',
-    proveedor: 'local',
+    storageBucket: input.remoteBucket ?? 'private-media',
+    proveedor: input.remoteBucket ? 's3' : 'local',
     extension: input.extension,
     storageKey: input.key,
     nombreOriginal: title + '.' + input.extension,
@@ -153,7 +154,7 @@ function assertLocalDatabase() {
   );
 }
 
-async function addSchoolListings(manager) {
+async function addSchoolListings(manager, remote) {
   await manager.query('SELECT pg_advisory_xact_lock(1806320491)');
   const store = new PostgresStore(manager);
   const email = 'market-escolar@demo.unired.test';
@@ -198,6 +199,28 @@ async function addSchoolListings(manager) {
       id,
       path.join(__dirname, 'demo', 'market-escolar', id + '.webp'),
     );
+    if (remote) {
+      const image = prepared.get(id);
+      const thumbnail = image.thumbnail;
+      const thumbnailPath = storage.absolute(thumbnail.key);
+      await Promise.all([
+        remote.upload(
+          image.key,
+          storage.absolute(image.key),
+          image.bytes,
+          image.sha256.toString('hex'),
+          image.mime,
+        ),
+        remote.upload(
+          thumbnail.key,
+          thumbnailPath,
+          thumbnail.bytes,
+          thumbnail.sha256.toString('hex'),
+          image.mime,
+        ),
+      ]);
+      image.remoteBucket = remote.bucket;
+    }
     const listing = await store.insert('anuncios_market', {
       vendedorId: seller.id,
       categoriaId,
@@ -235,17 +258,59 @@ async function addSchoolListings(manager) {
   return inserted;
 }
 
+async function assertPublishedCatalog() {
+  const site = 'https://unired-backend-mpl6.onrender.com/api/v1';
+  const response = await fetch(site + '/listings?estado=publicado&limit=4', {
+    signal: AbortSignal.timeout(20000),
+  });
+  assert(response.ok, 'No se pudo comprobar el catálogo publicado.');
+  const { items } = await response.json();
+  assert(
+    items?.length > 0,
+    'El catálogo publicado no tiene registros para comprobar el destino.',
+  );
+  const rows = await source.query(
+    "SELECT id::text,titulo FROM anuncios_market WHERE estado='publicado' AND id=ANY($1::bigint[])",
+    [items.map((item) => item.id)],
+  );
+  assert(
+    items.every((item) =>
+      rows.some(
+        (row) => row.id === String(item.id) && row.titulo === item.titulo,
+      ),
+    ),
+    'La conexión configurada no corresponde al catálogo publicado de UniRed.',
+  );
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  assertLocalDatabase();
-  if (args.length === 1 && args[0] === '--market-escolar') {
-    assert(
-      (process.env.STORAGE_PROVIDER || 'local') === 'local',
-      'Usa almacenamiento local para el catálogo demo.',
-    );
+  const publishSchoolCatalog =
+    args.length === 1 && args[0] === '--publicar-market-escolar';
+  if (!publishSchoolCatalog) assertLocalDatabase();
+  if (
+    publishSchoolCatalog ||
+    (args.length === 1 && args[0] === '--market-escolar')
+  ) {
+    if (publishSchoolCatalog)
+      assert(
+        process.env.DATABASE_URL &&
+          source.options.ssl &&
+          !['127.0.0.1', 'localhost', '::1'].includes(source.options.host),
+        'Configura la base remota de UniRed mediante DATABASE_URL con TLS.',
+      );
+    else
+      assert(
+        (process.env.STORAGE_PROVIDER || 'local') === 'local',
+        'Usa almacenamiento local para el catálogo demo.',
+      );
     await source.initialize();
     try {
-      const inserted = await source.transaction(addSchoolListings);
+      if (publishSchoolCatalog) await assertPublishedCatalog();
+      const remote = publishSchoolCatalog ? new ObjetosS3() : null;
+      const inserted = await source.transaction((manager) =>
+        addSchoolListings(manager, remote),
+      );
       console.log(
         JSON.stringify({ nuevos: inserted, catalogo: supplies.length }),
       );

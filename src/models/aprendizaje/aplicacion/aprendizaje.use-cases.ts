@@ -15,6 +15,7 @@ import {
 } from '../../../core/dominio/comun/entidades';
 import * as v from '../../../core/dominio/comun/validaciones';
 import { readyFile, validGrant } from '../../../core/dominio/politicas/acceso';
+import { finalPrice } from '../../../core/dominio/politicas/precios';
 import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
 import { CursosUseCases } from '../../cursos/aplicacion/cursos.use-cases';
 
@@ -137,19 +138,14 @@ export class AprendizajeUseCases extends CasosUsoBase {
         'La inscripción fue revocada por el tutor.',
         403,
       );
-      const config = await tx.store.one('configuracion_comercial', { id: '1' });
-      ensure(
-        config?.tutoriasGratuitas || Number(course.precioBase) === 0,
-        'La inscripción a este curso está en pausa hasta habilitar el pago con tarjeta.',
-        409,
-        'TUTORING_PAYMENTS_DISABLED',
-      );
       const data = {
         // El precio no concede permisos: solo la aceptación del tutor activa
         // una solicitud, también cuando el curso es gratuito.
         estado: 'solicitada',
         activadaEn: null,
         completadaEn: null,
+        aprobadaParaPagoEn: null,
+        importeDemo: finalPrice(course.precioBase, course.descuentoPorcentaje),
       };
       const enrollment = existing
         ? (
@@ -201,7 +197,7 @@ export class AprendizajeUseCases extends CasosUsoBase {
       const [result] = await tx.store.update(
         'inscripciones_tutoria',
         { id: enrollment.id },
-        { estado: 'cancelada' },
+        { estado: 'cancelada', aprobadaParaPagoEn: null },
       );
       await tx.store.update(
         'conversaciones',
@@ -256,6 +252,41 @@ export class AprendizajeUseCases extends CasosUsoBase {
           'El curso no admite nuevas altas.',
           409,
         );
+        if (
+          Number(enrollment.importeDemo) > 0 &&
+          !(await tx.store.one('pagos_demo', {
+            concepto: 'tutoria_inscripcion',
+            recursoId: enrollment.id,
+            usuarioId: enrollment.alumnoId,
+          }))
+        ) {
+          if (
+            enrollment.estado === 'solicitada' &&
+            enrollment.aprobadaParaPagoEn
+          )
+            return enrollment;
+          const [approved] = await tx.store.update(
+            'inscripciones_tutoria',
+            { id: enrollment.id },
+            { estado: 'solicitada', aprobadaParaPagoEn: new Date() },
+          );
+          await this.audit(
+            tx,
+            actor,
+            'inscripcion.aprobada_para_pago',
+            'inscripcion',
+            enrollment.id,
+            { motivo: reason },
+          );
+          await this.notify(
+            tx,
+            enrollment.alumnoId,
+            'inscripcion',
+            'El tutor aceptó tu solicitud. Confirma el pago demo para acceder.',
+            { cursoId: course.id, inscripcionId: enrollment.id },
+          );
+          return approved;
+        }
         ensure(
           ['solicitada', 'revocada', 'cancelada'].includes(enrollment.estado),
           'La inscripción ya está activa.',
@@ -273,6 +304,7 @@ export class AprendizajeUseCases extends CasosUsoBase {
         { id: enrollment.id },
         {
           estado: state,
+          aprobadaParaPagoEn: null,
           ...(state === 'activa'
             ? { activadaEn: new Date(), completadaEn: null }
             : {}),

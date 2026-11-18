@@ -449,6 +449,7 @@ export const schema: Record<
   },
   tutorias: {
     columns: {
+      gratuita: 'gratuita',
       resumen: 'resumen',
       idioma: 'idioma',
       objetivos: 'objetivos',
@@ -518,6 +519,8 @@ export const schema: Record<
   },
   inscripciones_tutoria: {
     columns: {
+      importeDemo: 'importe_demo',
+      aprobadaParaPagoEn: 'aprobada_para_pago_en',
       id: 'id',
       tutoriaId: 'tutoria_id',
       alumnoId: 'alumno_id',

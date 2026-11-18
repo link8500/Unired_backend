@@ -102,6 +102,13 @@ export class ComunidadUseCases extends CasosUsoBase {
     });
     return { mensaje: 'Notificaciones marcadas como leídas.' };
   }
+  async deleteNotification(actor: Actor, resourceId: unknown) {
+    await this.db.read.store.remove('notificaciones', {
+      id: v.id(resourceId),
+      usuarioId: actor.id,
+    });
+    return { mensaje: 'Notificación eliminada.' };
+  }
   async report(actor: Actor, input: unknown): Promise<Registro> {
     const body = v.object(input, ['tipo', 'recursoId', 'motivo', 'detalle']);
     const type = v.choice(
