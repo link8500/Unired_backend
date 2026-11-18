@@ -31,12 +31,30 @@ module.exports = async function interactions(ctx) {
     checks++;
     return result;
   }
-  await request(
+  const inquiry = {
+    clienteId: randomUUID(),
+    contenido: 'Hola, ¿sigue disponible el libro?',
+  };
+  const direct = await request(
     'POST',
-    '/listings/' + listing.id + '/conversations',
-    null,
+    '/listings/' + listing.id + '/inquiry',
+    inquiry,
     student,
-    403,
+    201,
+  );
+  assert.equal(direct.mensaje.contenido, inquiry.contenido);
+  const reply = await request(
+    'GET',
+    '/conversations/' + direct.conversacionId + '/messages',
+    null,
+    token,
+  );
+  assert.equal(reply.items[0].contenido, inquiry.contenido);
+  const sellerInbox = await request('GET', '/me/conversations', null, token);
+  assert.ok(
+    sellerInbox.items.some(
+      (chat) => chat.id === direct.conversacionId && chat.noLeidos === 1,
+    ),
   );
   const proposal = {
     clienteId: randomUUID(),
@@ -61,7 +79,7 @@ module.exports = async function interactions(ctx) {
         student,
       )
     ).conversacionId,
-    null,
+    direct.conversacionId,
   );
   await request(
     'PATCH',
@@ -77,7 +95,7 @@ module.exports = async function interactions(ctx) {
     token,
   );
   const conversationId = accepted.conversacionId;
-  assert.ok(conversationId);
+  assert.equal(conversationId, direct.conversacionId);
   await request(
     'POST',
     '/conversations/' + conversationId + '/messages',
@@ -203,12 +221,12 @@ module.exports = async function interactions(ctx) {
       'Necesito acompañamiento para organizar componentes y comprender sus dependencias.',
     modalidad: 'online',
     duracionMinutos: 60,
-    precioConfirmado: '180.00',
+    precioConfirmado: '0.00',
   };
   await request(
     'POST',
     '/me/tutoring-requests',
-    { ...body, precioConfirmado: '0.00' },
+    { ...body, precioConfirmado: '180.00' },
     student,
     409,
   );
@@ -291,7 +309,7 @@ module.exports = async function interactions(ctx) {
   assert.equal(results[0].conversacionId, results[1].conversacionId);
   assert.equal(
     Number((await request('GET', '/me/wallet', null, token)).saldoDemo),
-    initialWallet - 27,
+    initialWallet,
   );
   const inbox = await request('GET', '/me/conversations', null, student);
   assert.equal(inbox.items[0].recursoTitulo, body.tema);
@@ -490,6 +508,12 @@ module.exports = async function interactions(ctx) {
     admin.accessToken,
   );
   assert.equal(rate.precioMinutoOnline, '5.00');
+  await request(
+    'PATCH',
+    '/admin/commerce/config',
+    { tutoriasGratuitas: false },
+    admin.accessToken,
+  );
   const quote = await request(
     'POST',
     '/tutorial-quote',
@@ -499,9 +523,101 @@ module.exports = async function interactions(ctx) {
   );
   assert.equal(quote.total, '300.00');
   assert.equal(quote.comision, '45.00');
+  const paidHelp = await request(
+    'POST',
+    '/me/tutoring-requests',
+    { ...body, precioConfirmado: quote.total },
+    student,
+    201,
+  );
+  const checkout = {
+    concepto: 'tutoria_solicitud',
+    recursoId: paidHelp.id,
+    importe: quote.total,
+    clienteId: randomUUID(),
+  };
+  await request('POST', '/demo/checkout', checkout, student, 409);
+  const paidHelpPath = '/me/tutoring-requests/' + paidHelp.id;
+  const initialDemoWallet = (await request('GET', '/me/wallet', null, token))
+    .saldoDemo;
+  const acceptedPaidHelp = await request(
+    'POST',
+    paidHelpPath + '/accept',
+    null,
+    token,
+    201,
+  );
+  const historyRow = async (auth, query = '') =>
+    (
+      await request('GET', '/me/tutoring-requests' + query, null, auth)
+    ).items.find((row) => row.id === paidHelp.id);
+  assert.equal((await historyRow(student)).pagoDemoConfirmado, false);
+  assert.equal(
+    (await request('GET', '/me/wallet', null, token)).saldoDemo,
+    initialDemoWallet,
+  );
+  await request(
+    'POST',
+    paidHelpPath + '/material',
+    { cursoId: course.id },
+    token,
+    409,
+  );
+  await request('POST', '/demo/checkout', checkout, token, 403);
+  await request(
+    'POST',
+    '/demo/checkout',
+    { ...checkout, importe: '1.00' },
+    student,
+    409,
+  );
+  const [receipt, retried] = await Promise.all([
+    request('POST', '/demo/checkout', checkout, student, 201),
+    request(
+      'POST',
+      '/demo/checkout',
+      { ...checkout, clienteId: randomUUID() },
+      student,
+      201,
+    ),
+  ]);
+  assert.equal(receipt.simulado, true);
+  assert.equal(receipt.pago.importe, '300.00');
+  assert.equal(retried.pago.id, receipt.pago.id);
+  assert.equal((await historyRow(student)).pagoDemoId, receipt.pago.id);
+  const tutorRow = await historyRow(token, '?vista=impartidas');
+  assert.equal(tutorRow.pagoDemoConfirmado, true);
+  assert.equal(tutorRow.pagoDemoId, null);
+  assert.equal(
+    (await request('GET', '/me/wallet', null, token)).saldoDemo,
+    initialDemoWallet,
+  );
+  await request('PATCH', paidHelpPath, { estado: 'finalizada' }, student);
+  assert.equal((await historyRow(student)).pagoDemoId, receipt.pago.id);
+  const {
+    rows: [legacy],
+  } = await ctx.client.query(
+    `INSERT INTO solicitudes_apoyo
+      (alumno_id, tutor_id, area_id, materia, tema, descripcion, modalidad,
+        duracion_minutos, precio, comision, estado, aceptada_en)
+      VALUES ($1,$2,$3,'Matemática','Solicitud anterior','Solicitud ya aceptada antes del pago demo.',
+        'online',60,300,45,'aceptada',now()) RETURNING id`,
+    [paidHelp.alumnoId, acceptedPaidHelp.tutorId, paidHelp.areaId],
+  );
+  assert.equal(
+    (
+      await request(
+        'PATCH',
+        '/me/tutoring-requests/' + legacy.id,
+        { estado: 'finalizada' },
+        student,
+      )
+    ).estado,
+    'finalizada',
+  );
   console.log(
     'OK: ' +
       checks +
-      ' solicitudes adicionales de ofertas, chat condicionado, cierre, reputación, tutorías, notificaciones, material y búsqueda.',
+      ' solicitudes adicionales de chat directo, ofertas anteriores, cierre, reputación, tutorías, notificaciones, material y búsqueda.',
   );
 };

@@ -35,15 +35,8 @@ export async function validarContextoConversacion(
   if (conversation.tipo === 'market') {
     const listing = await tx.queries.publicListing(conversation.anuncioId!);
     ensure(
-      listing &&
-        ['publicado', 'reservado'].includes(String(listing.estado)) &&
-        (await tx.store.one('ofertas_market', {
-          anuncioId: conversation.anuncioId,
-          compradorId: conversation.consultanteId,
-          vendedorId: conversation.propietarioId,
-          estado: 'aceptada',
-        })),
-      'El autor debe aceptar la oferta antes de abrir el chat.',
+      listing && ['publicado', 'reservado'].includes(String(listing.estado)),
+      'El anuncio ya no está disponible.',
       403,
     );
   } else if (conversation.solicitudApoyoId) {

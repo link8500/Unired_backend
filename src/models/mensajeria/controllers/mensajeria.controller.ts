@@ -68,7 +68,7 @@ export class MensajeriaController {
     return this.chat.marketContact(actor, id);
   }
   @Post('listings/:id/inquiry')
-  @BodyFields('Confirmar una consulta inicial al vendedor una sola vez', [
+  @BodyFields('Enviar el primer mensaje al vendedor', [
     'clienteId',
     'contenido',
   ])

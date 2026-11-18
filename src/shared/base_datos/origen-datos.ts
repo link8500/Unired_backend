@@ -13,6 +13,8 @@ import { ComercialDemo1794873600000 } from './migraciones/1794873600000-comercia
 import { InteraccionesComunidad1794873600001 } from './migraciones/1794873600001-interacciones-comunidad';
 import { PreciosCursos1794873600002 } from './migraciones/1794873600002-precios-cursos';
 import { AccesoSocial1794931200000 } from './migraciones/1794931200000-acceso-social';
+import { TutoriasGratuitas1795017600000 } from './migraciones/1795017600000-tutorias-gratuitas';
+import { PagoDemoTutoria1795017600001 } from './migraciones/1795017600001-pago-demo-tutoria';
 
 export function databaseOptions(): DataSourceOptions {
   return {
@@ -28,6 +30,8 @@ export function databaseOptions(): DataSourceOptions {
       InteraccionesComunidad1794873600001,
       PreciosCursos1794873600002,
       AccesoSocial1794931200000,
+      TutoriasGratuitas1795017600000,
+      PagoDemoTutoria1795017600001,
     ],
     migrationsTableName: 'typeorm_migrations',
     synchronize: false,

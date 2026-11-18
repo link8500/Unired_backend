@@ -14,10 +14,6 @@ import { CasosUsoBase } from '../../../core/aplicacion/casos-uso-base';
 import { ensure } from '../../../core/dominio/comun/errores';
 import * as v from '../../../core/dominio/comun/validaciones';
 import { validGrant } from '../../../core/dominio/politicas/acceso';
-import {
-  centavos,
-  importe,
-} from '../../../core/dominio/politicas/importes-comerciales';
 import { ComercialUseCases } from '../../comercial/aplicacion/comercial.use-cases';
 
 export class InteraccionesUseCases extends CasosUsoBase {
@@ -331,7 +327,7 @@ export class InteraccionesUseCases extends CasosUsoBase {
       modalidad: body.modalidad,
       duracionMinutos: body.duracionMinutos,
     });
-    if (body.precioConfirmado !== undefined)
+    if (body.precioConfirmado !== undefined || Number(quote.total) > 0)
       ensure(
         v.money(body.precioConfirmado, 'precioConfirmado') === quote.total,
         'La tarifa cambió. Revisa la cotización antes de publicar.',
@@ -362,6 +358,7 @@ export class InteraccionesUseCases extends CasosUsoBase {
         modalidad: quote.modalidad,
         duracionMinutos: quote.duracionMinutos,
         precio: quote.total,
+        requierePagoDemo: Number(quote.total) > 0,
         comision: quote.comision,
       });
       await tx.queries.notifyTutors(
@@ -458,35 +455,6 @@ export class InteraccionesUseCases extends CasosUsoBase {
         'No puedes interactuar con esta persona.',
         403,
       );
-      await tx.store.one('usuarios', { id: actor.id }, { lock: true });
-      const wallet = await tx.store.one(
-        'carteras_tutor',
-        { usuarioId: actor.id },
-        { lock: true },
-      );
-      const fee = centavos(request.comision);
-      ensure(
-        fee === 0n || (wallet && centavos(wallet.saldoDemo) >= fee),
-        'Recarga tu cartera de demostración para cubrir la comisión indicada.',
-        409,
-        'DEMO_BALANCE_REQUIRED',
-      );
-      if (fee > 0n && wallet) {
-        await tx.store.update(
-          'carteras_tutor',
-          { usuarioId: actor.id },
-          {
-            saldoDemo: importe(centavos(wallet.saldoDemo) - fee),
-            actualizadoEn: new Date(),
-          },
-        );
-        await tx.store.insert('movimientos_cartera', {
-          usuarioId: actor.id,
-          tipo: 'comision_demo',
-          importe: importe(-fee),
-          descripcion: 'Comisión simulada por solicitud ' + request.id,
-        });
-      }
       await tx.store.update(
         'solicitudes_apoyo',
         { id: request.id },
@@ -517,7 +485,6 @@ export class InteraccionesUseCases extends CasosUsoBase {
         'solicitud_apoyo.aceptada',
         'solicitud_apoyo',
         request.id,
-        { comisionDemo: request.comision },
       );
       return result;
     });
@@ -536,6 +503,7 @@ export class InteraccionesUseCases extends CasosUsoBase {
         'Solo el tutor asignado puede compartir material durante la tutoría.',
         403,
       );
+      await this.requireDemoPayment(tx, request);
       ensure(
         !request.cursoId,
         'Esta solicitud ya tiene un curso de material asociado.',
@@ -617,6 +585,7 @@ export class InteraccionesUseCases extends CasosUsoBase {
         'Esta solicitud no admite el cambio.',
         409,
       );
+      if (state === 'finalizada') await this.requireDemoPayment(tx, request);
       const [result] = await tx.store.update(
         'solicitudes_apoyo',
         { id: request.id },
@@ -656,6 +625,18 @@ export class InteraccionesUseCases extends CasosUsoBase {
       );
       return result;
     });
+  }
+  private async requireDemoPayment(tx: Transaccion, request: SolicitudApoyo) {
+    if (!request.requierePagoDemo) return;
+    ensure(
+      await tx.store.one('pagos_demo', {
+        concepto: 'tutoria_solicitud',
+        recursoId: request.id,
+        usuarioId: request.alumnoId,
+      }),
+      'El estudiante debe confirmar el pago de demostración.',
+      409,
+    );
   }
   async review(
     actor: Actor,

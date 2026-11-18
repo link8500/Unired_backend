@@ -13,6 +13,7 @@ export async function cotizarMinutos(
   areaId: number,
   modalidad: 'online' | 'presencial',
   minutos: number,
+  { aplicarModoGratuito = false } = {},
 ) {
   ensure(
     Number.isSafeInteger(minutos) && minutos >= 0 && minutos <= 1000000,
@@ -20,9 +21,13 @@ export async function cotizarMinutos(
   );
   const config = await tx.store.one('configuracion_comercial', { id: 1 });
   ensure(config, 'Las tarifas todavía no están configuradas.', 503);
-  const tarifa = await tx.store.one('tarifas_tutoria', { areaId });
-  const porMinuto =
-    modalidad === 'online'
+  const gratuita = aplicarModoGratuito && config.tutoriasGratuitas;
+  const tarifa = gratuita
+    ? null
+    : await tx.store.one('tarifas_tutoria', { areaId });
+  const porMinuto = gratuita
+    ? '0.00'
+    : modalidad === 'online'
       ? (tarifa?.precioMinutoOnline ?? config.precioMinutoOnline)
       : (tarifa?.precioMinutoPresencial ?? config.precioMinutoPresencial);
   const totalCentavos = centavos(porMinuto) * BigInt(minutos);
@@ -39,6 +44,7 @@ export async function cotizarMinutos(
     total,
     comision: comision(total, config.comisionPorcentaje),
     moneda: 'NIO',
+    modoGratuito: gratuita,
     simulado: true,
   };
 }

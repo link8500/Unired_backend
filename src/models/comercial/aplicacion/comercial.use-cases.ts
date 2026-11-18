@@ -6,7 +6,7 @@ import {
   Registro,
   Transaccion,
 } from '../../../core/dominio/comun/contratos';
-import { Empresa } from '../../../core/dominio/comun/entidades';
+import { Empresa, PagoDemo } from '../../../core/dominio/comun/entidades';
 import { ensure } from '../../../core/dominio/comun/errores';
 import * as v from '../../../core/dominio/comun/validaciones';
 import { role, validGrant } from '../../../core/dominio/politicas/acceso';
@@ -36,6 +36,7 @@ export class ComercialUseCases extends CasosUsoBase {
       'diasDestacado',
       'precioMinutoOnline',
       'precioMinutoPresencial',
+      'tutoriasGratuitas',
     ]);
     const fields = v.pickDefined(body, {
       comisionPorcentaje: (x) => v.money(x, 'comisionPorcentaje', 10000n),
@@ -44,6 +45,7 @@ export class ComercialUseCases extends CasosUsoBase {
       precioMinutoOnline: (x) => v.money(x, 'precioMinutoOnline', 1000000n),
       precioMinutoPresencial: (x) =>
         v.money(x, 'precioMinutoPresencial', 1000000n),
+      tutoriasGratuitas: (x) => v.boolean(x, 'tutoriasGratuitas'),
     });
     return this.db.transaction(async (tx) => {
       const [result] = await tx.store.update(
@@ -436,7 +438,9 @@ export class ComercialUseCases extends CasosUsoBase {
       'modalidad',
     );
     const minutes = v.integer(body.duracionMinutos, 'duracionMinutos', 15, 480);
-    return cotizarMinutos(this.db.read, area.id, modality, minutes);
+    return cotizarMinutos(this.db.read, area.id, modality, minutes, {
+      aplicarModoGratuito: true,
+    });
   }
   /** Nunca recibe tarjeta, fecha, CVV ni marca bancaria. Solo la intención de demo. */
   rates() {
@@ -499,11 +503,20 @@ export class ComercialUseCases extends CasosUsoBase {
         'recarga_tutor',
         'destacar_anuncio',
         'destacar_curso',
+        'tutoria_solicitud',
       ],
       'concepto',
     );
     return this.db.transaction(async (tx) => {
       await tx.store.one('usuarios', { id: actor.id }, { lock: true });
+      const response = (pago: PagoDemo) => ({
+        pago,
+        mensaje:
+          concept === 'tutoria_solicitud'
+            ? 'Pago de demostración confirmado.'
+            : 'Compra simulada realizada. No se efectuó ningún cobro.',
+        simulado: true,
+      });
       const existing = await tx.store.one('pagos_demo', {
         usuarioId: actor.id,
         clienteId: nonce,
@@ -515,7 +528,7 @@ export class ComercialUseCases extends CasosUsoBase {
           'La operación ya se usó para otra compra.',
           409,
         );
-        if (concept === 'recarga_tutor')
+        if (concept === 'recarga_tutor' || concept === 'tutoria_solicitud')
           ensure(
             existing.importe === v.money(body.importe, 'importe'),
             'El importe ya fue confirmado con otro valor.',
@@ -531,11 +544,7 @@ export class ComercialUseCases extends CasosUsoBase {
             'El plan no coincide con la compra original.',
             409,
           );
-        return {
-          pago: existing,
-          mensaje: 'Compra simulada realizada. No se efectuó ningún cobro.',
-          simulado: true,
-        };
+        return response(existing);
       }
       const config = await this.resource(
         tx.store,
@@ -547,7 +556,39 @@ export class ComercialUseCases extends CasosUsoBase {
         concept === 'recarga_tutor' ? null : v.id(body.recursoId);
       let company: Empresa | undefined;
       let planId: string | undefined;
-      if (concept === 'suscripcion_empresa') {
+      let tutorId: number | null = null;
+      if (concept === 'tutoria_solicitud') {
+        const request = await this.owned(
+          tx.store,
+          'solicitudes_apoyo',
+          resourceId,
+          actor,
+          'alumnoId',
+        );
+        amount = request.precio;
+        ensure(
+          v.money(body.importe, 'importe') === amount,
+          'El importe no coincide con el precio de la solicitud.',
+          409,
+        );
+        const previous = await tx.store.one('pagos_demo', {
+          concepto: concept,
+          recursoId: request.id,
+          usuarioId: actor.id,
+        });
+        if (previous) return response(previous);
+        ensure(
+          request.estado === 'aceptada',
+          'El pago demo está disponible después de que un tutor acepte la solicitud.',
+          409,
+        );
+        ensure(
+          request.requierePagoDemo,
+          'Esta solicitud no requiere un pago de demostración.',
+          409,
+        );
+        tutorId = request.tutorId;
+      } else if (concept === 'suscripcion_empresa') {
         company = await this.company(tx, actor, resourceId);
         ensure(
           company.estado === 'aprobada',
@@ -647,7 +688,10 @@ export class ComercialUseCases extends CasosUsoBase {
           importe: amount,
           descripcion: 'Recarga simulada · sin dinero real',
         });
-      } else if (concept !== 'suscripcion_empresa') {
+      } else if (
+        concept === 'destacar_anuncio' ||
+        concept === 'destacar_curso'
+      ) {
         await tx.store.insert('destacados_publicacion', {
           propietarioId: actor.id,
           ...(concept === 'destacar_curso'
@@ -657,15 +701,19 @@ export class ComercialUseCases extends CasosUsoBase {
           terminaEn: new Date(Date.now() + config.diasDestacado * 86400000),
         });
       }
+      if (tutorId !== null)
+        await this.notify(
+          tx,
+          tutorId,
+          'solicitud_tutoria',
+          'El estudiante confirmó el pago de demostración',
+          { solicitudId: resourceId, vista: 'impartidas' },
+        );
       await this.audit(tx, actor, 'pago.simulado', 'pago_demo', payment.id, {
         concepto: concept,
         importe: amount,
       });
-      return {
-        pago: payment,
-        mensaje: 'Compra simulada realizada. No se efectuó ningún cobro.',
-        simulado: true,
-      };
+      return response(payment);
     });
   }
 }

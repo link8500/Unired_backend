@@ -124,16 +124,6 @@ export class MensajeriaUseCases extends CasosUsoBase {
         'Anuncio no disponible para nuevos contactos.',
         409,
       );
-      ensure(
-        await tx.store.one('ofertas_market', {
-          anuncioId: resource.id,
-          compradorId: actor.id,
-          vendedorId: ownerId,
-          estado: 'aceptada',
-        }),
-        'Espera a que el autor acepte tu oferta para conversar.',
-        403,
-      );
     } else await this.learning.conversationAccess(tx, actor.id, resource.id);
     const key: Filtros =
       context === 'market'
@@ -191,10 +181,7 @@ export class MensajeriaUseCases extends CasosUsoBase {
       { order: { id: 'DESC' } },
     );
     return {
-      conversacionId:
-        offer?.estado === 'aceptada'
-          ? (offer.conversacionId ?? conversation?.id ?? null)
-          : null,
+      conversacionId: conversation?.id ?? null,
       mensajeEnviado: !!sent,
       oferta: offer ?? null,
       importeSugerido: listing.precioBase,
@@ -203,7 +190,7 @@ export class MensajeriaUseCases extends CasosUsoBase {
     };
   }
 
-  /** Confirmación explícita del comprador. El bloqueo evita repetir el primer
+  /** Primer mensaje del comprador. El bloqueo evita repetir el primer
    * contacto desde dos pestañas o después de una respuesta de red perdida. */
   async inquire(
     actor: Actor,

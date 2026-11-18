@@ -1,5 +1,4 @@
-// Restauración de datos de demostración exclusivamente para la base local.
-// Requiere un respaldo PostgreSQL real antes de sustituir las cuentas.
+// Carga local de datos demo. --market-escolar agrega solo las publicaciones escolares.
 require('dotenv/config');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
@@ -20,6 +19,7 @@ const {
   AlmacenamientoLocalAdapter,
 } = require('../dist/shared/almacenamiento/almacenamiento-local.adapter');
 const fixture = require('./demo/fixtures.cjs');
+const supplies = require('./demo/market-escolar.cjs');
 
 const ago = (days) => new Date(Date.now() - days * 86400000);
 const later = (days) => ago(-days);
@@ -141,15 +141,7 @@ async function storeFile(store, ownerId, purpose, name, title) {
   return file;
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  const backupIndex = args.indexOf('--backup');
-  const backupPath =
-    backupIndex >= 0 ? path.resolve(args[backupIndex + 1] || '') : null;
-  assert(
-    args.includes('--reset-local-data') && backupPath,
-    'Usa --reset-local-data --backup RUTA_AL_RESPALDO.dump. Este comando sustituye los datos locales.',
-  );
+function assertLocalDatabase() {
   assert(
     (process.env.NODE_ENV || 'development') === 'development',
     'Las muestras solo se pueden cargar en development.',
@@ -158,6 +150,116 @@ async function main() {
     ['127.0.0.1', 'localhost', '::1'].includes(source.options.host) &&
       source.options.database === 'unired',
     'Solo se permite la base local unired.',
+  );
+}
+
+async function addSchoolListings(manager) {
+  await manager.query('SELECT pg_advisory_xact_lock(1806320491)');
+  const store = new PostgresStore(manager);
+  const email = 'market-escolar@demo.unired.test';
+  let seller = await store.one('usuarios', { email });
+  if (!seller) {
+    seller = await store.insert('usuarios', {
+      nombre: 'Útiles escolares UniRed · Demo',
+      email,
+      estado: 'activo',
+      emailVerificadoEn: new Date(),
+    });
+    await store.insert('usuario_roles', {
+      usuarioId: seller.id,
+      rolCodigo: 'usuario',
+    });
+    await store.insert('perfiles_usuario', {
+      usuarioId: seller.id,
+      presentacion:
+        'Catálogo ficticio de útiles escolares para probar el Marketplace.',
+      pais: 'Nicaragua',
+      ciudad: 'Managua',
+    });
+  }
+  const categories = new Map(
+    (await store.find('categorias_market', { activo: true })).map(
+      (category) => [category.codigo, category.id],
+    ),
+  );
+  let inserted = 0;
+  for (const [id, title, description, price, category] of supplies) {
+    const reference = 'DEMO-ESCOLAR-' + id;
+    if (
+      await store.one('anuncios_market', {
+        vendedorId: seller.id,
+        referenciaPrivada: reference,
+      })
+    )
+      continue;
+    const categoriaId = categories.get(category);
+    assert(categoriaId, 'Falta la categoría ' + category);
+    await prepareImage(
+      id,
+      path.join(__dirname, 'demo', 'market-escolar', id + '.webp'),
+    );
+    const listing = await store.insert('anuncios_market', {
+      vendedorId: seller.id,
+      categoriaId,
+      titulo: title,
+      descripcion:
+        description +
+        '\n\nPublicación de demostración. Imagen ilustrativa y precio de ejemplo.',
+      condicion: 'nuevo',
+      estado: 'publicado',
+      tipoPrecio: 'negociable',
+      precioBase: price.toFixed(2),
+      moneda: 'NIO',
+      ciudad: 'Managua',
+      formasEntrega: ['punto_acordado'],
+      disponibilidad: 'unico',
+      etiquetas: ['útiles escolares', 'demostración'],
+      referenciaPrivada: reference,
+      publicadoEn: new Date(),
+    });
+    const photo = await storeFile(
+      store,
+      seller.id,
+      'imagen_anuncio',
+      id,
+      title,
+    );
+    await store.insert('imagenes_anuncio', {
+      anuncioId: listing.id,
+      vendedorId: seller.id,
+      archivoId: photo.id,
+      orden: 0,
+    });
+    inserted++;
+  }
+  return inserted;
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  assertLocalDatabase();
+  if (args.length === 1 && args[0] === '--market-escolar') {
+    assert(
+      (process.env.STORAGE_PROVIDER || 'local') === 'local',
+      'Usa almacenamiento local para el catálogo demo.',
+    );
+    await source.initialize();
+    try {
+      const inserted = await source.transaction(addSchoolListings);
+      console.log(
+        JSON.stringify({ nuevos: inserted, catalogo: supplies.length }),
+      );
+    } finally {
+      await source.destroy();
+    }
+    return;
+  }
+  const backupIndex = args.indexOf('--backup');
+  const backupPath =
+    backupIndex >= 0 ? path.resolve(args[backupIndex + 1] || '') : null;
+  assert(
+    args.includes('--reset-local-data') && backupPath,
+    'Usa --market-escolar para agregar útiles o --reset-local-data --backup RUTA_AL_RESPALDO.dump para sustituir los datos locales.',
   );
   const backup = await fs.readFile(backupPath);
   assert(

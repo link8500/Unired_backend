@@ -137,6 +137,13 @@ export class AprendizajeUseCases extends CasosUsoBase {
         'La inscripción fue revocada por el tutor.',
         403,
       );
+      const config = await tx.store.one('configuracion_comercial', { id: '1' });
+      ensure(
+        config?.tutoriasGratuitas || Number(course.precioBase) === 0,
+        'La inscripción a este curso está en pausa hasta habilitar el pago con tarjeta.',
+        409,
+        'TUTORING_PAYMENTS_DISABLED',
+      );
       const data = {
         // El precio no concede permisos: solo la aceptación del tutor activa
         // una solicitud, también cuando el curso es gratuito.

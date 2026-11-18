@@ -646,6 +646,7 @@ export interface ConfiguracionComercial extends RegistroEntidad {
   diasDestacado: number;
   precioMinutoOnline: string;
   precioMinutoPresencial: string;
+  tutoriasGratuitas: boolean;
   actualizadoEn: Date;
 }
 export interface MapaEntidades {
@@ -692,6 +693,7 @@ export interface SolicitudApoyo extends RegistroEntidad {
   modalidad: string;
   duracionMinutos: number;
   precio: string;
+  requierePagoDemo: boolean;
   comision: string;
   moneda: string;
   estado: string;

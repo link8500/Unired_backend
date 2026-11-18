@@ -20,6 +20,10 @@ const courseAccess =
   "t.estado = 'publicada' AND t.eliminada_en IS NULL AND u.estado = 'activo' AND u.eliminado_en IS NULL AND a.activo AND h.estado = 'vigente' AND h.valida_desde <= CURRENT_TIMESTAMP AND (h.valida_hasta IS NULL OR h.valida_hasta > CURRENT_TIMESTAMP)";
 const courseJoin =
   ' FROM tutorias t JOIN usuarios u ON u.id=t.tutor_id JOIN areas_tutoria a ON a.id=t.area_id JOIN habilitaciones_tutor h ON h.id=t.habilitacion_id';
+const freeTutoring =
+  '(SELECT tutorias_gratuitas FROM configuracion_comercial WHERE id=1)';
+const visibleCoursePrice = `CASE WHEN ${freeTutoring} THEN 0.00::numeric ELSE t.precio_base END`;
+const visibleCourseDiscount = `CASE WHEN ${freeTutoring} THEN 0.00::numeric ELSE t.descuento_porcentaje END`;
 // La lectura usa el material actual. Los videos solo aportan su duración
 // verificada y el texto se estima a 240 palabras por minuto.
 const courseDuration = (id: string, publishedOnly: boolean) => `
@@ -44,7 +48,10 @@ const courseFields =
    (SELECT COUNT(*)::int FROM lecciones_tutoria l WHERE l.tutoria_id=t.id AND l.publicada AND l.archivada_en IS NULL) AS lecciones_total,
    (SELECT COUNT(*)::int FROM recursos_leccion r JOIN lecciones_tutoria l ON l.id=r.leccion_id WHERE r.tutoria_id=t.id AND l.publicada AND l.archivada_en IS NULL) AS recursos_total,` +
   `t.resumen,t.idioma,t.objetivos,t.requisitos,t.dirigido_a,${courseDuration('t.id', true)} AS duracion_estimada_minutos,` +
-  "t.id,t.tutor_id,t.area_id,t.titulo,t.descripcion,t.nivel,t.modalidad,t.precio_base,t.descuento_porcentaje,t.moneda,t.portada_archivo_id,t.publicada_en,u.nombre AS tutor_nombre,a.nombre AS area_nombre,(SELECT COUNT(*)::int FROM inscripciones_tutoria i WHERE i.tutoria_id=t.id AND i.estado IN ('activa','completada')) AS alumnos,(SELECT ROUND(AVG(r.puntuacion),2)::text FROM resenas_tutoria r WHERE r.tutoria_id=t.id AND r.estado='visible') AS puntuacion";
+  `t.id,t.tutor_id,t.area_id,t.titulo,t.descripcion,t.nivel,t.modalidad,${visibleCoursePrice} AS precio_base,
+   ${visibleCourseDiscount} AS descuento_porcentaje,t.moneda,t.portada_archivo_id,t.publicada_en,u.nombre AS tutor_nombre,a.nombre AS area_nombre,
+   (SELECT COUNT(*)::int FROM inscripciones_tutoria i WHERE i.tutoria_id=t.id AND i.estado IN ('activa','completada')) AS alumnos,
+   (SELECT ROUND(AVG(r.puntuacion),2)::text FROM resenas_tutoria r WHERE r.tutoria_id=t.id AND r.estado='visible') AS puntuacion`;
 const listingJoin =
   ' FROM anuncios_market t JOIN usuarios u ON u.id=t.vendedor_id JOIN categorias_market a ON a.id=t.categoria_id';
 const listingAccess =
@@ -135,9 +142,14 @@ export class PostgresQueries implements Consultas {
     }
     const join = ` FROM solicitudes_apoyo s JOIN usuarios student ON student.id=s.alumno_id
       LEFT JOIN usuarios tutor ON tutor.id=s.tutor_id JOIN areas_tutoria a ON a.id=s.area_id
-      LEFT JOIN resenas_interaccion r ON r.solicitud_id=s.id AND r.autor_id=$1 WHERE ${where}`;
+      LEFT JOIN resenas_interaccion r ON r.solicitud_id=s.id AND r.autor_id=$1
+      LEFT JOIN pagos_demo p ON p.concepto='tutoria_solicitud' AND p.recurso_id=s.id AND p.usuario_id=s.alumno_id
+      WHERE ${where}`;
     return this.page(
-      'SELECT s.*,student.nombre AS alumno_nombre,tutor.nombre AS tutor_nombre,a.nombre AS area_nombre,r.id AS resena_propia_id' +
+      `SELECT s.*,student.nombre AS alumno_nombre,tutor.nombre AS tutor_nombre,a.nombre AS area_nombre,r.id AS resena_propia_id,
+       p.id IS NOT NULL AS pago_demo_confirmado,
+       CASE WHEN s.alumno_id=$1 THEN p.id END AS pago_demo_id,
+       CASE WHEN s.alumno_id=$1 THEN p.creado_en END AS pago_demo_fecha` +
         join +
         ' ORDER BY s.id DESC',
       'SELECT COUNT(*)::int AS total' + join,
@@ -397,7 +409,7 @@ export class PostgresQueries implements Consultas {
     let where = ' WHERE p.usuario_id=$1 AND p.salio_en IS NULL';
     if (!p.incluirArchivadas)
       where += ` AND p.archivada_en IS NULL AND c.estado='abierta' AND u.estado='activo' AND u.eliminado_en IS NULL
-      AND ((c.tipo='market' AND a.estado IN ('publicado','reservado') AND EXISTS(SELECT 1 FROM ofertas_market o WHERE o.anuncio_id=c.anuncio_id AND o.comprador_id=c.consultante_id AND o.estado='aceptada'))
+      AND ((c.tipo='market' AND a.estado IN ('publicado','reservado') AND a.eliminado_en IS NULL)
         OR (c.solicitud_apoyo_id IS NOT NULL AND s.estado='aceptada')
         OR (c.tutoria_id IS NOT NULL AND EXISTS(SELECT 1 FROM inscripciones_tutoria i WHERE i.tutoria_id=c.tutoria_id AND i.alumno_id=c.consultante_id AND i.estado='activa')))`;
     if (p.conversacionId !== undefined) {
@@ -419,11 +431,11 @@ export class PostgresQueries implements Consultas {
       `SELECT c.id,c.tipo,c.anuncio_id,COALESCE(c.tutoria_id,s.curso_id) AS tutoria_id,c.solicitud_apoyo_id,c.estado,c.ultimo_mensaje_en,u.id AS interlocutor_id,u.nombre AS interlocutor_nombre,
       up.avatar_archivo_id AS interlocutor_avatar_id,COALESCE(a.titulo,s.tema,t.titulo) AS recurso_titulo,
       LEFT(COALESCE(a.descripcion,s.descripcion,NULLIF(t.resumen,''),t.descripcion,''),1000) AS recurso_descripcion,
-      COALESCE(a.precio_base,s.precio,t.precio_base) AS recurso_precio_base,
-      COALESCE(a.descuento_porcentaje,t.descuento_porcentaje) AS recurso_descuento_porcentaje,
+      COALESCE(a.precio_base,s.precio,${visibleCoursePrice}) AS recurso_precio_base,
+      COALESCE(a.descuento_porcentaje,${visibleCourseDiscount}) AS recurso_descuento_porcentaje,
       COALESCE(a.moneda,s.moneda,t.moneda) AS recurso_moneda,
       COALESCE(a.estado::text,s.estado,t.estado::text) AS recurso_estado,
-      CASE WHEN c.tipo='market' THEN a.tipo_precio::text WHEN COALESCE(s.precio,t.precio_base)=0 THEN 'gratis' ELSE 'fijo' END AS recurso_tipo_precio,
+      CASE WHEN c.tipo='market' THEN a.tipo_precio::text WHEN COALESCE(s.precio,${visibleCoursePrice})=0 THEN 'gratis' ELSE 'fijo' END AS recurso_tipo_precio,
       COALESCE((SELECT i.archivo_id FROM imagenes_anuncio i JOIN archivos f ON f.id=i.archivo_id
         WHERE i.anuncio_id=a.id AND f.estado='listo' AND f.escaneo='limpio' AND f.eliminado_en IS NULL ORDER BY i.orden LIMIT 1),t.portada_archivo_id) AS recurso_imagen_id,
       CASE WHEN last.eliminado_en IS NOT NULL THEN 'Mensaje eliminado' WHEN last.archivo_id IS NOT NULL THEN COALESCE(last.contenido,'Archivo adjunto') ELSE last.contenido END AS ultimo_mensaje,

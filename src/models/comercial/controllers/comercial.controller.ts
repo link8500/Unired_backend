@@ -198,6 +198,7 @@ export class ComercialController {
     'diasDestacado',
     'precioMinutoOnline',
     'precioMinutoPresencial',
+    'tutoriasGratuitas',
   ])
   update(@CurrentActor() actor: Actor, @Body() body: unknown) {
     return this.commerce.updateConfig(actor, body);
